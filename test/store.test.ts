@@ -1,4 +1,14 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -66,6 +76,70 @@ describe("the token file", () => {
     expect(await readdir(folder)).toEqual(["config.json"]);
   });
 
+  it("refuses a symbolic link as the config folder and changes nothing it points at", async () => {
+    const real = join(home, "dotfiles");
+    await mkdir(real, { mode: 0o755 });
+    await chmod(real, 0o755);
+    const folder = join(home, "hushscript");
+    await symlink(real, folder);
+    await expect(saveToken(join(folder, "config.json"), TEST_TOKEN, "linux")).rejects.toMatchObject(
+      { code: "config_invalid", exitCode: 1 },
+    );
+    expect((await stat(real)).mode & 0o777).toBe(0o755);
+    expect(await readdir(real)).toEqual([]);
+  });
+
+  it("refuses a dangling symbolic link as the config folder too", async () => {
+    const folder = join(home, "hushscript");
+    await symlink(join(home, "nowhere"), folder);
+    await expect(saveToken(join(folder, "config.json"), TEST_TOKEN, "linux")).rejects.toMatchObject(
+      { code: "config_invalid" },
+    );
+  });
+
+  it("login reports a symlinked config folder with exit 1", async () => {
+    const h = harness({ home, secret: TEST_TOKEN });
+    await mkdir(join(home, ".config"));
+    await mkdir(join(home, "dotfiles"));
+    await symlink(join(home, "dotfiles"), join(home, ".config", "hushscript"));
+    expect(await h.run("login")).toBe(1);
+    expect(h.stderr()).toContain("symbolic link");
+    expect(h.stderr()).not.toContain(TEST_TOKEN);
+  });
+
+  it("warns when group or others can read the token file, and still reads it", async () => {
+    const path = join(home, "config.json");
+    await saveToken(path, TEST_TOKEN, "linux");
+    const warnings: string[] = [];
+    const warn = (text: string): void => {
+      warnings.push(text);
+    };
+    expect(await readStoredToken(path, { platform: "linux", warn })).toBe(TEST_TOKEN);
+    expect(warnings).toEqual([]);
+    for (const mode of [0o640, 0o604, 0o644]) {
+      await chmod(path, mode);
+      expect(await readStoredToken(path, { platform: "linux", warn })).toBe(TEST_TOKEN);
+    }
+    expect(warnings).toHaveLength(3);
+    expect(warnings[0]).toContain(`${path} can be read by other users (mode 0640)`);
+    expect(warnings[0]).toContain(`chmod 600 ${path}`);
+    warnings.length = 0;
+    await readStoredToken(path, { platform: "win32", warn });
+    expect(warnings).toEqual([]);
+  });
+
+  it("shows that warning once, on stderr, in a real command that uses the stored token", async () => {
+    const h = harness({ home });
+    const path = join(home, ".config", "hushscript", "config.json");
+    await saveToken(path, TEST_TOKEN, "linux");
+    await chmod(path, 0o644);
+    expect(await h.run("balance", "--json")).toBe(0);
+    expect(h.stderr()).toBe(
+      `Warning: ${path} can be read by other users (mode 0644). Run: chmod 600 ${path}\n`,
+    );
+    expect(JSON.parse(h.stdout())).toMatchObject({ minutes: 300 });
+  });
+
   it("reads nothing when there is no file", async () => {
     expect(await readStoredToken(join(home, "missing.json"))).toBeNull();
   });
@@ -102,7 +176,25 @@ describe("token precedence", () => {
     const env = { HUSHSCRIPT_TOKEN: "from-env" };
     expect(await resolveToken({ flag: "from-flag", env, stored })).toBe("from-flag");
     expect(await resolveToken({ flag: undefined, env, stored })).toBe("from-env");
-    expect(await resolveToken({ flag: "", env: { HUSHSCRIPT_TOKEN: "" }, stored })).toBe("stored");
+    expect(await resolveToken({ flag: undefined, env: { HUSHSCRIPT_TOKEN: "" }, stored })).toBe(
+      "stored",
+    );
+  });
+
+  it("treats an empty --token as a usage error instead of falling through", async () => {
+    const env = { HUSHSCRIPT_TOKEN: "from-env" };
+    for (const flag of ["", "  "]) {
+      await expect(resolveToken({ flag, env, stored })).rejects.toMatchObject({
+        code: "usage_error",
+        exitCode: 2,
+      });
+    }
+    for (const argv of [["--token", ""], ["--token="]]) {
+      const h = harness({ home, env });
+      expect(await h.run("balance", ...argv)).toBe(2);
+      expect(h.stderr()).toContain("--token is empty");
+      expect(h.created).toEqual([]);
+    }
   });
 
   it("does not read the store when an earlier source answers", async () => {
@@ -158,6 +250,15 @@ describe("login and logout", () => {
     expect(await h.run("login", "--token", TEST_TOKEN, "--json")).toBe(0);
     expect(h.secretPrompts).toEqual([]);
     expect(JSON.parse(h.stdout())).toEqual({ stored: true, path: file() });
+    expect(h.stderr()).toContain("shell history and the process list");
+    expect(h.stderr()).toContain("pipe it on stdin");
+    expect(h.stderr()).not.toContain(TEST_TOKEN);
+  });
+
+  it("does not warn about the command line when the token was typed", async () => {
+    const h = harness({ home, secret: TEST_TOKEN });
+    await h.run("login");
+    expect(h.stderr()).toBe("");
   });
 
   it("refuses a token in the wrong format and writes nothing", async () => {

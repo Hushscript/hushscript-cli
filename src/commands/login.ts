@@ -14,6 +14,11 @@ export function registerLogin(program: Command, rt: Runtime): void {
       const token = (supplied ?? (await deps.io.readSecret("Hushscript token: "))).trim();
       rt.secrets.push(token);
       if (token === "") throw usageError("No token was entered.");
+      if (supplied !== undefined) {
+        deps.io.stderr(
+          "Warning: a token on the command line can leak through shell history and the process list. Run `hushscript login` without --token to type it, or pipe it on stdin.\n",
+        );
+      }
       // The SDK checks the format without sending anything; its error never carries the token.
       new Hushscript({ token });
       const path = storePath(deps);

@@ -49,6 +49,7 @@ export function transcript(overrides: Partial<Body> = {}): Transcript {
 interface FakeApi {
   balance: Mock<Api["balance"]>;
   transcribe: Mock<Api["transcribe"]>;
+  resume: Mock<Api["resume"]>;
   buy: Mock<Api["buy"]>;
   transcripts: { list: Mock<Api["transcripts"]["list"]>; get: Mock<Api["transcripts"]["get"]> };
   jobs: { list: Mock<Api["jobs"]["list"]> };
@@ -67,6 +68,7 @@ function fakeApi(): FakeApi {
       }),
     ),
     transcribe: vi.fn<Api["transcribe"]>(() => Promise.resolve(transcript())),
+    resume: vi.fn<Api["resume"]>(() => Promise.resolve(transcript())),
     buy: vi.fn<Api["buy"]>(() => Promise.resolve({ seconds: 18_000, minutes: 300 })),
     transcripts: {
       list: vi.fn<Api["transcripts"]["list"]>(() => rows([])),

@@ -38,6 +38,17 @@ export function usageError(message: string, hint?: string): CliError {
   return new CliError({ code: "usage_error", message, exitCode: 2, hint });
 }
 
-export function interrupted(resumeToken: string | null): CliError {
-  return new CliError({ code: "interrupted", message: "Interrupted.", exitCode: 130, resumeToken });
+export function interrupted(
+  resumeToken: string | null,
+  idempotencyKey: string | null = null,
+  hint: string | null = null,
+): CliError {
+  return new CliError({
+    code: "interrupted",
+    message: "Interrupted.",
+    exitCode: 130,
+    resumeToken,
+    idempotencyKey,
+    hint,
+  });
 }

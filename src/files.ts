@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { rename, stat, unlink, writeFile } from "node:fs/promises";
+import { lstat, open, readlink, rename, stat, unlink } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { CliError, usageError } from "./errors.ts";
 
@@ -29,14 +29,39 @@ export async function checkOutputPath(path: string): Promise<void> {
   }
 }
 
-/** Writes through a temp file in the same folder and a rename, so the target is never half written. */
+const MAX_LINK_HOPS = 40;
+
+/** Follows symbolic links, also dangling ones, to the path a write should land on. */
+async function resolveLinks(path: string): Promise<string> {
+  let current = path;
+  for (let hops = 0; hops < MAX_LINK_HOPS; hops += 1) {
+    const info = await lstat(current).catch(() => null);
+    if (info?.isSymbolicLink() !== true) return current;
+    current = resolve(dirname(current), await readlink(current));
+  }
+  throw Object.assign(new Error("Too many levels of symbolic links."), { code: "ELOOP" });
+}
+
+/**
+ * Writes through a temp file next to the target and a rename, so the target is never half written.
+ * An existing target keeps its mode, and a symbolic link is written through to the file it points at.
+ */
 export async function writeFileAtomic(path: string, content: string, hint: string): Promise<void> {
-  const temp = join(dirname(path), `.${basename(path)}.${randomBytes(6).toString("hex")}.tmp`);
+  let temp: string | null = null;
   try {
-    await writeFile(temp, content, { flag: "wx" });
-    await rename(temp, path);
+    const target = await resolveLinks(path);
+    const existing = await statOrNull(target);
+    temp = join(dirname(target), `.${basename(target)}.${randomBytes(6).toString("hex")}.tmp`);
+    const handle = await open(temp, "wx");
+    try {
+      await handle.writeFile(content);
+      if (existing !== null) await handle.chmod(Number(existing.mode) & 0o7777);
+    } finally {
+      await handle.close();
+    }
+    await rename(temp, target);
   } catch (error) {
-    await unlink(temp).catch(() => undefined);
+    if (temp !== null) await unlink(temp).catch(() => undefined);
     const reason = (error as NodeJS.ErrnoException).code ?? "unknown error";
     throw new CliError({
       code: "write_failed",

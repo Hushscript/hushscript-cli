@@ -6,6 +6,7 @@ import { registerJobs } from "./commands/jobs.ts";
 import { registerLogin } from "./commands/login.ts";
 import { registerLogout } from "./commands/logout.ts";
 import { registerPacks } from "./commands/packs.ts";
+import { registerResume } from "./commands/resume.ts";
 import { registerTranscribe } from "./commands/transcribe.ts";
 import { registerTranscript } from "./commands/transcript.ts";
 import { registerTranscripts } from "./commands/transcripts.ts";
@@ -40,8 +41,9 @@ function buildProgram(rt: Runtime, program: Command): void {
       writeOut: (text) => {
         rt.deps.io.stdout(text);
       },
+      // Under --json stderr carries only JSON; a bare `hushscript --json` reports its usage error that way.
       writeErr: (text) => {
-        rt.deps.io.stderr(text);
+        if (!rt.out.json) rt.deps.io.stderr(text);
       },
       outputError: () => undefined,
     })
@@ -50,6 +52,7 @@ function buildProgram(rt: Runtime, program: Command): void {
   registerLogout(program, rt);
   registerBalance(program, rt);
   registerTranscribe(program, rt);
+  registerResume(program, rt);
   registerTranscripts(program, rt);
   registerTranscript(program, rt);
   registerJobs(program, rt);
@@ -81,8 +84,15 @@ export async function run(argv: readonly string[], deps: Deps): Promise<number> 
   } catch (error) {
     if (error instanceof CommanderError) {
       if (CLEAN_EXIT.has(error.code)) return 0;
-      // Bare `hushscript`: commander already printed the help.
-      if (error.code === "commander.help") return 2;
+      if (error.code === "commander.help") {
+        // `hushscript help` is a request for help, like --help.
+        if (error.exitCode === 0) return 0;
+        // Bare `hushscript`: commander already printed the help, unless --json asked for JSON only.
+        if (!out.json) return 2;
+        return out.fail(
+          usageError("A command is required.", "Run `hushscript --help` to list them."),
+        );
+      }
       return out.fail(usageError(error.message.replace(/^error: /, "")));
     }
     return out.fail(error);

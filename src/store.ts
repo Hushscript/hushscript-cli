@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { chmod, mkdir, open, readFile, rename, unlink } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { CliError } from "./errors.ts";
+import { CliError, usageError } from "./errors.ts";
+import { shellWord } from "./shell.ts";
 
 export interface Environment {
   env: Record<string, string | undefined>;
@@ -36,8 +37,23 @@ function storeError(path: string, problem: string): CliError {
   });
 }
 
-/** The stored token, or null when nobody logged in. */
-export async function readStoredToken(path: string): Promise<string | null> {
+export interface ReadOptions {
+  platform: NodeJS.Platform;
+  warn: (text: string) => void;
+}
+
+async function warnIfShared(path: string, { platform, warn }: ReadOptions): Promise<void> {
+  if (platform === "win32") return;
+  const info = await stat(path).catch(() => null);
+  if (info === null || (info.mode & 0o077) === 0) return;
+  const mode = (info.mode & 0o777).toString(8).padStart(4, "0");
+  warn(
+    `Warning: ${path} can be read by other users (mode ${mode}). Run: chmod 600 ${shellWord(path)}`,
+  );
+}
+
+/** The stored token, or null when nobody logged in. Warns when other users can read the file; it is still read. */
+export async function readStoredToken(path: string, options?: ReadOptions): Promise<string | null> {
   let raw: string;
   try {
     raw = await readFile(path, "utf8");
@@ -53,6 +69,7 @@ export async function readStoredToken(path: string): Promise<string | null> {
   }
   const token = (parsed as { token?: unknown } | null)?.token;
   if (typeof token !== "string" || token === "") throw storeError(path, "holds no token");
+  if (options !== undefined) await warnIfShared(path, options);
   return token;
 }
 
@@ -63,6 +80,15 @@ export async function saveToken(
   platform: NodeJS.Platform,
 ): Promise<void> {
   const dir = dirname(path);
+  // chmod follows a link, so a symlinked folder could change the mode of whatever it points at.
+  if ((await lstat(dir).catch(() => null))?.isSymbolicLink() === true) {
+    throw new CliError({
+      code: "config_invalid",
+      message: `The config folder ${dir} is a symbolic link, so the token was not stored.`,
+      exitCode: 1,
+      hint: "Replace the link with a real folder, or point XDG_CONFIG_HOME at one.",
+    });
+  }
   await mkdir(dir, { recursive: true, mode: 0o700 });
   const posix = platform !== "win32";
   if (posix) await chmod(dir, 0o700);
@@ -102,8 +128,11 @@ export interface TokenSources {
 
 /** `--token`, then `HUSHSCRIPT_TOKEN`, then the stored token. The store is not read when an earlier source answers. */
 export async function resolveToken(sources: TokenSources): Promise<string | null> {
-  const flag = nonEmpty(sources.flag);
-  if (flag !== undefined) return flag;
+  if (sources.flag !== undefined) {
+    if (sources.flag.trim() === "")
+      throw usageError("--token is empty.", "Pass a token, or leave the flag out.");
+    return sources.flag;
+  }
   const fromEnv = nonEmpty(sources.env["HUSHSCRIPT_TOKEN"]);
   if (fromEnv !== undefined) return fromEnv;
   return await sources.stored();
