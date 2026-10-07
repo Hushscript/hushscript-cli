@@ -45,6 +45,12 @@ export function registerTranscribe(program: Command, rt: Runtime): void {
       if (options.out !== undefined) await checkOutputPath(options.out);
       await runJob(rt, {
         file,
+        passed: {
+          language,
+          translate: translateTo?.join(","),
+          format: options.format,
+          out: options.out,
+        },
         format,
         out: options.out,
         resumeToken: null,

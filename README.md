@@ -69,8 +69,11 @@ hushscript buy 300min --yes
 Every purchase has an idempotency key: the one from `--key`, or a fresh one the CLI makes. If a
 purchase fails after it was sent, or the CLI is stopped by SIGINT, SIGTERM or SIGHUP once `buy` has
 started (exit code 130, also while the card is still being looked up), it prints the key and says
-"The purchase may have been sent. Retry with --key <key>: the same key never charges twice." Retry
-with the same key and it cannot be charged twice:
+"The purchase may have been sent. Retry with --key <key>: the same key never charges twice." Only a
+refusal that proves nothing was charged (a 400, 402, 403, 404 or 422 answer, such as `insufficient_balance`
+when the account cannot cover the pack) leaves the notice out; a 401 or 429 does not prove it, because the
+server answers those before it replays a purchase that already went through. Retry with the same key and
+it cannot be charged twice:
 
 ```sh
 hushscript buy 300min --yes --key <key>
@@ -89,14 +92,16 @@ hushscript resume <token> meeting.mp3 --format srt --out meeting.srt
 ```
 
 When the run stopped before the API handed out a token, the message carries the idempotency key
-instead and names the command that replays the same `transcribe` call; the same key never creates
-the job twice:
+instead and names the command that replays the same `transcribe` call, with the `--language`, `--translate`,
+`--format` and `--out` you passed, so the replay asks for the same job; the same key never creates the
+job twice:
 
 ```sh
-hushscript transcribe --key <key> meeting.mp3
+hushscript transcribe --key <key> meeting.mp3 --language en --format srt --out meeting.srt
 ```
 
-`resume` takes the same recording and the same `--format`, `--out` and `--json` as `transcribe`; if
+The resume command carries the `--format` and `--out` you passed (the flags you did not pass are left
+out). `resume` takes the same recording and the same `--format`, `--out` and `--json` as `transcribe`; if
 the job has finished meanwhile it just fetches the transcript.
 
 ## Scripting

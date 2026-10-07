@@ -174,11 +174,22 @@ describe("a purchase that fails", () => {
   });
 
   it("says nothing about a charge for statuses that never charge", async () => {
-    for (const status of [400, 401, 402, 403, 404, 422, 429]) {
+    for (const status of [400, 402, 403, 404, 422]) {
       const h = await failWith(new ApiError({ code: "refused", status, message: "No." }), "k-3");
       const report = errorDocument(h) as { hint: string | null; idempotencyKey: string };
       expect(report.hint).toBeNull();
       expect(report.idempotencyKey).toBe("k-3");
+    }
+  });
+
+  it("says the purchase may have been sent after a 401 or 429, which the server answers before its replay", async () => {
+    for (const status of [401, 429]) {
+      const h = await failWith(new ApiError({ code: "refused", status, message: "No." }), "k-5");
+      expect(errorDocument(h)).toMatchObject({
+        status,
+        idempotencyKey: "k-5",
+        hint: "The purchase may have been sent. Retry with --key k-5: the same key never charges twice.",
+      });
     }
   });
 

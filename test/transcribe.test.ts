@@ -256,6 +256,98 @@ describe("Ctrl-C during transcribe", () => {
     expect(h.stderr()).toContain(`Hint: Continue with: hushscript resume rt-1 ${file}`);
   });
 
+  it("carries every option into the replay hint, quoted where the shell needs it", async () => {
+    const out = join(home, "my call's.srt");
+    const h = cli();
+    hang(h, null, null);
+    const result = h.run(
+      "transcribe",
+      file,
+      "--key",
+      "replay_4",
+      "--language",
+      "pt-BR",
+      "--translate",
+      "es,de",
+      "--format",
+      "srt",
+      "--out",
+      out,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    h.interrupt();
+    expect(await result).toBe(130);
+    expect(h.stderr()).toContain(
+      `Hint: Retry with: hushscript transcribe --key replay_4 ${file} --language pt-BR --translate es,de --format srt --out '${home}/my call'\\''s.srt'\n`,
+    );
+  });
+
+  it("leaves the flags the user did not pass out of the replay hint", async () => {
+    const h = cli();
+    hang(h, null, null);
+    const result = h.run("transcribe", file, "--key", "replay_5", "--format", "vtt");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    h.interrupt();
+    expect(await result).toBe(130);
+    expect(h.stderr()).toContain(
+      `Hint: Retry with: hushscript transcribe --key replay_5 ${file} --format vtt\n`,
+    );
+  });
+
+  it("carries only --format and --out into the resume hint, quoted", async () => {
+    const out = join(home, "two words.txt");
+    const h = cli();
+    hang(h, "rt-6", "rt-6");
+    const result = h.run(
+      "transcribe",
+      file,
+      "--language",
+      "en",
+      "--translate",
+      "es",
+      "--format",
+      "json",
+      "--out",
+      out,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    h.interrupt();
+    expect(await result).toBe(130);
+    expect(h.stderr()).toContain(
+      `Hint: Continue with: hushscript resume rt-6 ${file} --format json --out '${out}'\n`,
+    );
+  });
+
+  it("keeps --format and --out in the hint of an interrupted resume, and omits them when not passed", async () => {
+    const out = join(home, "it's here.txt");
+    const hang2 = (h: Harness): void => {
+      h.api.resume.mockImplementation(
+        (token, _file, options) =>
+          new Promise((_resolve, reject) => {
+            options?.signal?.addEventListener("abort", () => {
+              reject(new AbortError({ message: "Aborted.", resumeToken: token }));
+            });
+          }),
+      );
+    };
+    const full = cli();
+    hang2(full);
+    const first = full.run("resume", "rt-7", file, "--format", "vtt", "--out", out);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    full.interrupt();
+    expect(await first).toBe(130);
+    expect(full.stderr()).toContain(
+      `Hint: Continue with: hushscript resume rt-7 ${file} --format vtt --out '${home}/it'\\''s here.txt'\n`,
+    );
+    const bare = cli();
+    hang2(bare);
+    const second = bare.run("resume", "rt-7", file);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    bare.interrupt();
+    expect(await second).toBe(130);
+    expect(bare.stderr()).toContain(`Hint: Continue with: hushscript resume rt-7 ${file}\n`);
+  });
+
   it("quotes a file name the shell would split", async () => {
     const spaced = join(home, "my call.mp3");
     await writeFile(spaced, "audio");
