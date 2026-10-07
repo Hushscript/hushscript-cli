@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": ["src/index.ts", "scripts/*.mjs", "e2e/*.mjs"],
+  "entry": ["scripts/*.mjs", "e2e/*.mjs"],
   "project": ["src/**/*.ts", "scripts/**/*.mjs", "e2e/**/*.mjs", "test/**/*.ts"],
-  "ignoreDependencies": ["prettier", "publint"]
+  "ignoreDependencies": ["prettier"]
 }

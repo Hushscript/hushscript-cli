@@ -63,8 +63,12 @@ lint version=floor: sdk-pack
     docker build --quiet -f docker/typos.Dockerfile -t hushscript-cli-typos:local docker
     run hushscript-cli-typos:local --config _typos.toml
     # The one lint step with network access: it asks the registry about advisories and signatures.
+    # Until @hushscript/sdk is published (docs/sdk-dependency.md) the signature check runs on a copy of the tree
+    # without it, because the registry has no such package yet; every other package is checked.
     docker run {{sandbox}} "hushscript-cli-dev:node{{version}}" \
-      sh -c 'timeout 300 npm audit --omit=dev --audit-level=high && timeout 300 npm audit signatures'
+      sh -c 'timeout 300 npm audit --omit=dev --audit-level=high \
+        && mkdir /tmp/signed && cp -r package.json package-lock.json node_modules /tmp/signed/ \
+        && rm -rf /tmp/signed/node_modules/@hushscript && cd /tmp/signed && timeout 300 npm audit signatures'
 
 # package build plus package-correctness checks, then install the packed CLI next to its production dependencies and run it.
 # tsup bundles its config next to the file, so the (read-only) repo root gets a copy in /tmp.
