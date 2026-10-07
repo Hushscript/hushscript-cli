@@ -274,6 +274,18 @@ describe("login and logout", () => {
     expect(await readStoredToken(file())).toBeNull();
   });
 
+  it("logout with an empty --token is a usage error and leaves the stored token alone", async () => {
+    const h = harness({ home, secret: TEST_TOKEN });
+    await h.run("login");
+    for (const argv of [["--token", ""], ["--token="], ["--token", "  "]]) {
+      const again = harness({ home });
+      expect(await again.run("logout", ...argv)).toBe(2);
+      expect(again.stderr()).toContain("--token is empty");
+      expect(again.stdout()).toBe("");
+      expect(await readStoredToken(file())).toBe(TEST_TOKEN);
+    }
+  });
+
   it("logout deletes the token and says so, also when there was none", async () => {
     const h = harness({ home, secret: TEST_TOKEN });
     await h.run("login");
