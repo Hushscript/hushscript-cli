@@ -15,8 +15,18 @@ interface Hooks {
   onResumeToken: (token: string) => void;
 }
 
+/** The flags the user passed, as typed, so a printed command asks for the same job and output again. */
+interface PassedFlags {
+  language?: string | undefined;
+  translate?: string | undefined;
+  format?: string | undefined;
+  out?: string | undefined;
+}
+
 export interface Job {
   file: string;
+  /** What `--language`, `--translate`, `--format` and `--out` held, when given; echoed in the hints. */
+  passed: PassedFlags;
   format: Format;
   out: string | undefined;
   /** The token already in hand (`resume`), printed again if this run is interrupted too. */
@@ -34,10 +44,27 @@ function progressLine(progress: Progress): string {
     : `Processing (${progress.state})`;
 }
 
-/** With a token the job continues; with only a key the same `transcribe` call is replayed, which creates nothing twice. */
-function continueHint(token: string | null, key: string | null, file: string): string | null {
-  if (token !== null) return `Continue with: hushscript resume ${token} ${shellWord(file)}`;
-  return key === null ? null : `Retry with: hushscript transcribe --key ${key} ${shellWord(file)}`;
+function flagWords(passed: PassedFlags, names: readonly (keyof PassedFlags)[]): string {
+  return names
+    .flatMap((name) => {
+      const value = passed[name];
+      return value === undefined ? [] : [` --${name} ${shellWord(value)}`];
+    })
+    .join("");
+}
+
+/**
+ * With a token the job continues (`resume` takes --format and --out); with only a key the same `transcribe`
+ * call is replayed with every option it had, which creates nothing twice and asks for the same job.
+ */
+function continueHint(token: string | null, key: string | null, job: Job): string | null {
+  const file = shellWord(job.file);
+  if (token !== null) {
+    return `Continue with: hushscript resume ${token} ${file}${flagWords(job.passed, ["format", "out"])}`;
+  }
+  if (key === null) return null;
+  const flags = flagWords(job.passed, ["language", "translate", "format", "out"]);
+  return `Retry with: hushscript transcribe --key ${key} ${file}${flags}`;
 }
 
 /** Runs a transcription to the end: stops cleanly on a signal and prints the transcript. */
@@ -73,7 +100,7 @@ export async function runJob(rt: Runtime, job: Job): Promise<void> {
           interrupted(
             resumeToken,
             job.idempotencyKey,
-            continueHint(resumeToken, job.idempotencyKey, job.file),
+            continueHint(resumeToken, job.idempotencyKey, job),
           ),
         ),
       );
@@ -89,7 +116,7 @@ export async function runJob(rt: Runtime, job: Job): Promise<void> {
       const known = error instanceof HushscriptError ? error : null;
       const token = known?.resumeToken ?? resumeToken;
       const key = known?.idempotencyKey ?? job.idempotencyKey;
-      throw interrupted(token, key, continueHint(token, key, job.file));
+      throw interrupted(token, key, continueHint(token, key, job));
     }
     throw error;
   } finally {

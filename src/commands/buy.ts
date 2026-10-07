@@ -9,7 +9,9 @@ export const NO_REFUND_NOTICE =
   "Minutes are added to your account instantly after payment. All purchases are final and non-refundable.";
 
 // A purchase refused with one of these statuses was never charged; any other failure after the send may have been.
-const NEVER_CHARGED: ReadonlySet<number> = new Set([400, 401, 402, 403, 404, 422, 429]);
+// 401 and 429 are not here: the server answers them before it replays a completed purchase, so after the SDK's
+// one retry they can follow a charged first attempt. 402 is answered after that replay, so it proves nothing was charged.
+const NEVER_CHARGED: ReadonlySet<number> = new Set([400, 402, 403, 404, 422]);
 
 function chargeNotice(key: string): string {
   return `The purchase may have been sent. Retry with --key ${key}: the same key never charges twice.`;
