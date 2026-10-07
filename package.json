@@ -19,7 +19,7 @@
     "dist"
   ],
   "bin": {
-    "hushscript": "./dist/index.js"
+    "hushscript": "dist/index.js"
   },
   "publishConfig": {
     "access": "public",

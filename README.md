@@ -26,17 +26,17 @@ variable in CI: a token on the command line is visible to other processes on the
 
 ## Commands
 
-| Command | What it does |
-|---|---|
-| `login` | Prompts for a token and stores it. |
-| `logout` | Deletes the stored token. |
-| `balance` | Shows the minutes you can spend. |
+| Command             | What it does                                                                                                                                   |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `login`             | Prompts for a token and stores it.                                                                                                             |
+| `logout`            | Deletes the stored token.                                                                                                                      |
+| `balance`           | Shows the minutes you can spend.                                                                                                               |
 | `transcribe <file>` | Uploads a recording, waits, and prints the transcript. Flags: `--language`, `--translate es,de`, `--format srt\|vtt\|txt\|json`, `--out path`. |
-| `transcripts` | Lists finished transcripts, newest first. Flag: `--limit` (default 20). |
-| `transcript <id>` | Prints one transcript. Flags: `--format`, `--lang` (a translation, or `cleaned`). |
-| `jobs` | Lists jobs. Flag: `--active` for the ones that have not finished. |
-| `packs` | Lists the minute packs you can buy, with prices. |
-| `buy <pack>` | Buys a pack with your saved default card. Flags: `--yes`, `--key`. |
+| `transcripts`       | Lists finished transcripts, newest first. Flag: `--limit` (default 20).                                                                        |
+| `transcript <id>`   | Prints one transcript. Flags: `--format`, `--lang` (a translation, or `cleaned`).                                                              |
+| `jobs`              | Lists jobs. Flag: `--active` for the ones that have not finished.                                                                              |
+| `packs`             | Lists the minute packs you can buy, with prices.                                                                                               |
+| `buy <pack>`        | Buys a pack with your saved default card. Flags: `--yes`, `--key`.                                                                             |
 
 Global flags: `--json` and `--token`. The default format is `txt`. `--out` writes through a temporary
 file and a rename, so the target is never half written.
@@ -67,18 +67,26 @@ A second Ctrl-C exits at once.
 `--json` prints one JSON document on stdout and nothing else. Errors go to stderr as one JSON object:
 
 ```json
-{ "code": "insufficient_balance", "numericCode": 4020, "status": 402, "message": "...", "hint": "...", "idempotencyKey": "...", "resumeToken": "..." }
+{
+  "code": "insufficient_balance",
+  "numericCode": 4020,
+  "status": 402,
+  "message": "...",
+  "hint": "...",
+  "idempotencyKey": "...",
+  "resumeToken": "..."
+}
 ```
 
 `idempotencyKey` and `resumeToken` appear only when the error has one. Progress bars are drawn on
 stderr only when it is a terminal and `--json` is off.
 
-| Exit code | Meaning |
-|---|---|
-| 0 | Success. |
-| 1 | The API or the SDK reported an error (also a missing token, or a declined purchase). |
-| 2 | Usage error: unknown command or flag, a bad value, `buy` without a terminal and without `--yes`. Nothing was sent. |
-| 130 | Interrupted. |
+| Exit code | Meaning                                                                                                            |
+| --------- | ------------------------------------------------------------------------------------------------------------------ |
+| 0         | Success.                                                                                                           |
+| 1         | The API or the SDK reported an error (also a missing token, or a declined purchase).                               |
+| 2         | Usage error: unknown command or flag, a bad value, `buy` without a terminal and without `--yes`. Nothing was sent. |
+| 130       | Interrupted.                                                                                                       |
 
 ## Development
 
