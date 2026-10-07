@@ -42,6 +42,31 @@ describe("transcribe", () => {
     expect(h.stderr()).toContain("hushscript transcript tr_test_0001 --lang es");
   });
 
+  it("mints a fresh key for every run without --key", async () => {
+    const h = cli();
+    await h.run("transcribe", file);
+    await h.run("transcribe", file);
+    const [first, second] = h.api.transcribe.mock.calls.map(
+      ([, options]) => options?.idempotencyKey,
+    );
+    expect(first).toMatch(UUID);
+    expect(second).toMatch(UUID);
+    expect(first).not.toBe(second);
+  });
+
+  it("passes --key to the SDK as the idempotency key", async () => {
+    const h = cli();
+    expect(await h.run("transcribe", file, "--key", "replay_1-a")).toBe(0);
+    expect(requestOf(h).idempotencyKey).toBe("replay_1-a");
+  });
+
+  it("rejects a --key outside 1 to 128 of A-Za-z0-9_-, sending nothing", async () => {
+    const h = cli();
+    expect(await h.run("transcribe", file, "--key", "no spaces")).toBe(2);
+    expect(h.created).toEqual([]);
+    expect(h.api.transcribe).not.toHaveBeenCalled();
+  });
+
   it("sends no language or translation unless asked", async () => {
     const h = cli();
     await h.run("transcribe", file);
@@ -181,7 +206,44 @@ describe("Ctrl-C during transcribe", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     h.interrupt();
     expect(await result).toBe(130);
-    expect(h.stderr()).toMatch(/^Error: Interrupted\.\nIdempotency key: [\da-f-]{36}\n$/);
+    expect(h.stderr()).toMatch(
+      /^Error: Interrupted\.\nHint: Retry with: .*\nIdempotency key: [\da-f-]{36}\n$/,
+    );
+  });
+
+  it("names the replay command with the key and the file when there is no token", async () => {
+    const h = cli();
+    hang(h, null, null);
+    const result = h.run("transcribe", file, "--key", "replay_2");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    h.interrupt();
+    expect(await result).toBe(130);
+    expect(h.stderr()).toBe(
+      `Error: Interrupted.\nHint: Retry with: hushscript transcribe --key replay_2 ${file}\nIdempotency key: replay_2\n`,
+    );
+  });
+
+  it("names the replay command in the JSON hint, and the resume command once a token exists", async () => {
+    const noToken = cli();
+    hang(noToken, null, null);
+    const first = noToken.run("transcribe", file, "--key", "replay_3", "--json");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    noToken.interrupt();
+    expect(await first).toBe(130);
+    expect(JSON.parse(noToken.stderr())).toMatchObject({
+      idempotencyKey: "replay_3",
+      hint: `Retry with: hushscript transcribe --key replay_3 ${file}`,
+    });
+    const withToken = cli();
+    hang(withToken, "rt-8", "rt-8");
+    const second = withToken.run("transcribe", file, "--key", "replay_3", "--json");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    withToken.interrupt();
+    expect(await second).toBe(130);
+    expect(JSON.parse(withToken.stderr())).toMatchObject({
+      resumeToken: "rt-8",
+      hint: `Continue with: hushscript resume rt-8 ${file}`,
+    });
   });
 
   it("names the resume command with the file next to the token", async () => {

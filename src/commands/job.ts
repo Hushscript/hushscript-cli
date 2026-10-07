@@ -34,8 +34,10 @@ function progressLine(progress: Progress): string {
     : `Processing (${progress.state})`;
 }
 
-function resumeHint(token: string | null, file: string): string | null {
-  return token === null ? null : `Continue with: hushscript resume ${token} ${shellWord(file)}`;
+/** With a token the job continues; with only a key the same `transcribe` call is replayed, which creates nothing twice. */
+function continueHint(token: string | null, key: string | null, file: string): string | null {
+  if (token !== null) return `Continue with: hushscript resume ${token} ${shellWord(file)}`;
+  return key === null ? null : `Retry with: hushscript transcribe --key ${key} ${shellWord(file)}`;
 }
 
 /** Runs a transcription to the end: stops cleanly on a signal and prints the transcript. */
@@ -67,7 +69,13 @@ export async function runJob(rt: Runtime, job: Job): Promise<void> {
       // The first signal is still winding the call down; this one ends the process, token first.
       if (drawing.drawn) io.stderr(CLEAR_LINE);
       io.forceExit(
-        out.fail(interrupted(resumeToken, job.idempotencyKey, resumeHint(resumeToken, job.file))),
+        out.fail(
+          interrupted(
+            resumeToken,
+            job.idempotencyKey,
+            continueHint(resumeToken, job.idempotencyKey, job.file),
+          ),
+        ),
       );
       return;
     }
@@ -80,11 +88,8 @@ export async function runJob(rt: Runtime, job: Job): Promise<void> {
     if (wasInterrupted()) {
       const known = error instanceof HushscriptError ? error : null;
       const token = known?.resumeToken ?? resumeToken;
-      throw interrupted(
-        token,
-        known?.idempotencyKey ?? job.idempotencyKey,
-        resumeHint(token, job.file),
-      );
+      const key = known?.idempotencyKey ?? job.idempotencyKey;
+      throw interrupted(token, key, continueHint(token, key, job.file));
     }
     throw error;
   } finally {

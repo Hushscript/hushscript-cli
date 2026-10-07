@@ -3,7 +3,14 @@ import type { TranscribeOptions } from "@hushscript/sdk";
 import { Option, type Command } from "commander";
 import { type Runtime } from "../context.ts";
 import { checkInputFile, checkOutputPath } from "../files.ts";
-import { FORMATS, parseLanguage, parseTranslate, resolveFormat, type Format } from "../validate.ts";
+import {
+  FORMATS,
+  parseKey,
+  parseLanguage,
+  parseTranslate,
+  resolveFormat,
+  type Format,
+} from "../validate.ts";
 import { runJob } from "./job.ts";
 
 interface Options {
@@ -11,6 +18,7 @@ interface Options {
   translate?: string;
   format?: Format;
   out?: string;
+  key?: string;
 }
 
 export function registerTranscribe(program: Command, rt: Runtime): void {
@@ -22,13 +30,17 @@ export function registerTranscribe(program: Command, rt: Runtime): void {
     .option("--translate <codes>", "also translate, for example es,de")
     .addOption(new Option("--format <format>", "output format (default txt)").choices(FORMATS))
     .option("--out <path>", "write the transcript to a file instead of stdout")
+    .option(
+      "--key <key>",
+      "idempotency key; pass the one an interrupted run printed to replay it safely",
+    )
     .action(async (file: string, options: Options) => {
       const language = options.language === undefined ? undefined : parseLanguage(options.language);
       const translateTo =
         options.translate === undefined ? undefined : parseTranslate(options.translate);
       const format = resolveFormat(rt.globals().json, options.format);
       // Made here, not inside the SDK, so an interrupt can print it before the SDK has anything to report.
-      const idempotencyKey = randomUUID();
+      const idempotencyKey = options.key === undefined ? randomUUID() : parseKey(options.key);
       await checkInputFile(file);
       if (options.out !== undefined) await checkOutputPath(options.out);
       await runJob(rt, {
