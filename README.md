@@ -31,7 +31,8 @@ stdin.
 - If the config folder is a symbolic link, `login` refuses with exit code 1 instead of changing the
   mode of whatever the link points at. Replace the link with a real folder, or point
   `XDG_CONFIG_HOME` at one.
-- `--token ""` is a usage error (exit code 2); it does not fall back to the other sources.
+- `--token ""` is a usage error (exit code 2) in every command, `logout` included; it does not fall
+  back to the other sources, and `logout` leaves the stored token alone.
 
 ## Commands
 
@@ -49,8 +50,11 @@ stdin.
 | `buy <pack>`            | Buys a pack with your saved default card. Flags: `--yes`, `--key`.                                                                             |
 
 Global flags: `--json` and `--token`. The default format is `txt`. `--out` writes through a temporary
-file and a rename, so the target is never half written. An existing target keeps its mode, and a
-symbolic link is written through to the file it points at.
+file and a rename, so the target is never half written. The temporary file is created with the mode
+the target will have (an existing target keeps its mode, a new file gets `0644` minus the umask). A
+symbolic link is followed, also a dangling one, and written through to the file it points at; before
+anything is sent, `--out` is checked at the place the link leads to, so a link into a folder that
+does not exist is a usage error (exit code 2) and no job is created.
 
 ### Buying minutes
 
@@ -63,8 +67,9 @@ hushscript buy 300min --yes
 ```
 
 Every purchase has an idempotency key: the one from `--key`, or a fresh one the CLI makes. If a
-purchase fails after it was sent, or the CLI is stopped by SIGINT, SIGTERM or SIGHUP while it waits
-for the answer (exit code 130), it prints the key and says the purchase may have been charged. Retry
+purchase fails after it was sent, or the CLI is stopped by SIGINT, SIGTERM or SIGHUP once `buy` has
+started (exit code 130, also while the card is still being looked up), it prints the key and says
+"The purchase may have been sent. Retry with --key <key>: the same key never charges twice." Retry
 with the same key and it cannot be charged twice:
 
 ```sh
@@ -74,8 +79,10 @@ hushscript buy 300min --yes --key <key>
 ### Interrupting
 
 Ctrl-C (SIGINT), SIGTERM or SIGHUP during `transcribe` or `resume` stops the call, prints the resume
-token of the job and exits with 130. A second signal exits at once, still printing the token. The
-message names the command that continues the job:
+token of the job and exits with 130. A second signal exits at once, still printing the token (and the
+idempotency key `transcribe` started with). A stop signal at any other moment, when nothing was sent
+that a token could be about, ends the CLI with 130 and prints nothing. The message names the command
+that continues the job:
 
 ```sh
 hushscript resume <token> meeting.mp3 --format srt --out meeting.srt
@@ -86,10 +93,17 @@ the job has finished meanwhile it just fetches the transcript.
 
 ## Scripting
 
-`--json` prints one JSON document on stdout and nothing else. Errors go to stderr as one JSON object:
+`--json` prints one JSON document on stdout and nothing else. `--help --json` prints `{"help": "..."}`
+and `--version --json` prints `{"version": "..."}`.
+
+Under `--json` stderr is JSON Lines: every line is one JSON object with a `type`. Notices and warnings
+come first, as they happen, and the error object, if the command failed, comes last:
 
 ```json
+{"type":"notice","code":"no_refund","message":"..."}
+{"type":"warning","code":"token_file_shared","message":"..."}
 {
+  "type": "error",
   "code": "insufficient_balance",
   "numericCode": 4020,
   "status": 402,
@@ -100,17 +114,19 @@ the job has finished meanwhile it just fetches the transcript.
 }
 ```
 
-`idempotencyKey` and `resumeToken` appear only when the error has one. Progress bars are drawn on
-stderr only when it is a terminal and `--json` is off. A few lines of text can come before that
-document on stderr, so read its last line: the `buy` no-refund notice, and the warnings about a
-readable token file or `login --token`.
+(The error object is one line on stderr; it is wrapped here to read.) `idempotencyKey` and `resumeToken`
+appear only when the error has one. The notice codes are `no_refund` (the `buy` notice) and the warning
+codes are `token_file_shared` (a stored token file other users can read) and `token_on_command_line`
+(`login --token`). Progress bars are drawn on stderr only when it is a terminal and `--json` is off.
+The one text that can still reach stderr under `--json` is a prompt (`login` asking for the token,
+`buy` asking to confirm): prompts are only shown when stdin is a terminal.
 
 | Exit code | Meaning                                                                                                            |
 | --------- | ------------------------------------------------------------------------------------------------------------------ |
 | 0         | Success.                                                                                                           |
 | 1         | The API or the SDK reported an error (also a missing token, or a declined purchase).                               |
 | 2         | Usage error: unknown command or flag, a bad value, `buy` without a terminal and without `--yes`. Nothing was sent. |
-| 130       | Interrupted by SIGINT, SIGTERM or SIGHUP.                                                                          |
+| 130       | Interrupted by SIGINT, SIGTERM or SIGHUP, at any moment of the run.                                                |
 
 ## Development
 

@@ -134,7 +134,14 @@ describe("the token file", () => {
     await saveToken(path, TEST_TOKEN, "linux");
     await chmod(path, 0o644);
     expect(await h.run("balance", "--json")).toBe(0);
-    expect(h.stderr()).toBe(
+    expect(JSON.parse(h.stderr())).toEqual({
+      type: "warning",
+      code: "token_file_shared",
+      message: `${path} can be read by other users (mode 0644). Run: chmod 600 ${path}`,
+    });
+    const plain = harness({ home });
+    expect(await plain.run("balance")).toBe(0);
+    expect(plain.stderr()).toBe(
       `Warning: ${path} can be read by other users (mode 0644). Run: chmod 600 ${path}\n`,
     );
     expect(JSON.parse(h.stdout())).toMatchObject({ minutes: 300 });

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { TranscribeOptions } from "@hushscript/sdk";
 import { Option, type Command } from "commander";
 import { type Runtime } from "../context.ts";
@@ -26,6 +27,8 @@ export function registerTranscribe(program: Command, rt: Runtime): void {
       const translateTo =
         options.translate === undefined ? undefined : parseTranslate(options.translate);
       const format = resolveFormat(rt.globals().json, options.format);
+      // Made here, not inside the SDK, so an interrupt can print it before the SDK has anything to report.
+      const idempotencyKey = randomUUID();
       await checkInputFile(file);
       if (options.out !== undefined) await checkOutputPath(options.out);
       await runJob(rt, {
@@ -33,11 +36,13 @@ export function registerTranscribe(program: Command, rt: Runtime): void {
         format,
         out: options.out,
         resumeToken: null,
+        idempotencyKey,
         translateTo,
         start: (api, hooks) => {
           const request: TranscribeOptions = {
             signal: hooks.signal,
             onResumeToken: hooks.onResumeToken,
+            idempotencyKey,
           };
           if (hooks.onProgress !== undefined) request.onProgress = hooks.onProgress;
           if (language !== undefined) request.language = language;

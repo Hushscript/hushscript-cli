@@ -21,6 +21,8 @@ export interface Job {
   out: string | undefined;
   /** The token already in hand (`resume`), printed again if this run is interrupted too. */
   resumeToken: string | null;
+  /** The idempotency key the call was started with, printed on an interrupt; `resume` has none. */
+  idempotencyKey: string | null;
   /** Languages `transcribe` asked for, announced once the transcript is ready. */
   translateTo: string[] | undefined;
   start(api: Api, hooks: Hooks): Promise<Transcript>;
@@ -64,7 +66,9 @@ export async function runJob(rt: Runtime, job: Job): Promise<void> {
     if (count > 1) {
       // The first signal is still winding the call down; this one ends the process, token first.
       if (drawing.drawn) io.stderr(CLEAR_LINE);
-      io.forceExit(out.fail(interrupted(resumeToken, null, resumeHint(resumeToken, job.file))));
+      io.forceExit(
+        out.fail(interrupted(resumeToken, job.idempotencyKey, resumeHint(resumeToken, job.file))),
+      );
       return;
     }
     abort.abort();
@@ -76,7 +80,11 @@ export async function runJob(rt: Runtime, job: Job): Promise<void> {
     if (wasInterrupted()) {
       const known = error instanceof HushscriptError ? error : null;
       const token = known?.resumeToken ?? resumeToken;
-      throw interrupted(token, known?.idempotencyKey ?? null, resumeHint(token, job.file));
+      throw interrupted(
+        token,
+        known?.idempotencyKey ?? job.idempotencyKey,
+        resumeHint(token, job.file),
+      );
     }
     throw error;
   } finally {

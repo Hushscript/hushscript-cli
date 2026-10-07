@@ -83,7 +83,7 @@ export async function openClient(rt: Runtime): Promise<Api> {
       readStoredToken(storePath(deps), {
         platform: deps.platform,
         warn: (text) => {
-          deps.io.stderr(`${text}\n`);
+          rt.out.warning("token_file_shared", text);
         },
       }),
   });

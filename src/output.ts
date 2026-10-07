@@ -70,7 +70,7 @@ function endWithNewline(text: string): string {
   return text.endsWith("\n") ? text : `${text}\n`;
 }
 
-/** What a command prints: one JSON document on stdout under --json, errors as JSON on stderr. */
+/** What a command prints: one JSON document on stdout under --json, and JSON Lines (notice, warning, then the error object) on stderr. */
 export class Output {
   readonly json: boolean;
   readonly #io: Io;
@@ -92,6 +92,22 @@ export class Output {
     this.#io.stdout(this.#io.stdoutIsTTY ? endWithNewline(text) : text);
   }
 
+  /** Something worth knowing before the command goes on: a line of text, or under --json a `notice` object. */
+  notice(code: string, message: string): void {
+    this.#line("notice", code, message, message);
+  }
+
+  /** A problem that does not stop the command: `Warning: ...`, or under --json a `warning` object. */
+  warning(code: string, message: string): void {
+    this.#line("warning", code, message, `Warning: ${message}`);
+  }
+
+  #line(type: "notice" | "warning", code: string, message: string, human: string): void {
+    const clean = scrub(message, this.#secrets);
+    if (this.json) this.#io.stderr(`${JSON.stringify({ type, code, message: clean })}\n`);
+    else this.#io.stderr(endWithNewline(scrub(human, this.#secrets)));
+  }
+
   /** A line for a person on stderr; silent under --json. */
   note(message: string): void {
     if (!this.json) this.#io.stderr(endWithNewline(message));
@@ -101,7 +117,7 @@ export class Output {
   fail(error: unknown): number {
     const report = describeError(error, this.#secrets);
     if (this.json) {
-      this.#io.stderr(`${JSON.stringify(report)}\n`);
+      this.#io.stderr(`${JSON.stringify({ type: "error", ...report })}\n`);
     } else {
       const lines = [`Error: ${report.message}`];
       if (report.hint !== null) lines.push(`Hint: ${report.hint}`);

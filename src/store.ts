@@ -47,9 +47,7 @@ async function warnIfShared(path: string, { platform, warn }: ReadOptions): Prom
   const info = await stat(path).catch(() => null);
   if (info === null || (info.mode & 0o077) === 0) return;
   const mode = (info.mode & 0o777).toString(8).padStart(4, "0");
-  warn(
-    `Warning: ${path} can be read by other users (mode ${mode}). Run: chmod 600 ${shellWord(path)}`,
-  );
+  warn(`${path} can be read by other users (mode ${mode}). Run: chmod 600 ${shellWord(path)}`);
 }
 
 /** The stored token, or null when nobody logged in. Warns when other users can read the file; it is still read. */
@@ -120,6 +118,13 @@ export async function removeToken(path: string): Promise<boolean> {
   }
 }
 
+/** `--token ""` is a usage error, in every command that sees the flag. */
+export function rejectEmptyTokenFlag(flag: string | undefined): void {
+  if (flag !== undefined && flag.trim() === "") {
+    throw usageError("--token is empty.", "Pass a token, or leave the flag out.");
+  }
+}
+
 export interface TokenSources {
   flag: string | undefined;
   env: Record<string, string | undefined>;
@@ -129,8 +134,7 @@ export interface TokenSources {
 /** `--token`, then `HUSHSCRIPT_TOKEN`, then the stored token. The store is not read when an earlier source answers. */
 export async function resolveToken(sources: TokenSources): Promise<string | null> {
   if (sources.flag !== undefined) {
-    if (sources.flag.trim() === "")
-      throw usageError("--token is empty.", "Pass a token, or leave the flag out.");
+    rejectEmptyTokenFlag(sources.flag);
     return sources.flag;
   }
   const fromEnv = nonEmpty(sources.env["HUSHSCRIPT_TOKEN"]);
