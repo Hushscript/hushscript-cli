@@ -275,6 +275,16 @@ describe("login and logout", () => {
     expect(await readStoredToken(file())).toBeNull();
   });
 
+  it("does not prompt when stdin is a terminal but stderr is piped", async () => {
+    const h = harness({ home, stdinIsTTY: true, stderrIsTTY: false, secret: TEST_TOKEN });
+    expect(await h.run("login")).toBe(2);
+    expect(h.secretPrompts).toEqual([]);
+    expect(h.stderr()).toContain("no terminal to ask");
+    expect(await readStoredToken(file())).toBeNull();
+    expect(await h.run("login", "--token", TEST_TOKEN)).toBe(0);
+    expect(await readStoredToken(file())).toBe(TEST_TOKEN);
+  });
+
   it("refuses an empty answer with a usage error", async () => {
     const h = harness({ home, secret: "\n" });
     expect(await h.run("login")).toBe(2);

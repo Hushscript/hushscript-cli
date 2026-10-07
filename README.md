@@ -36,18 +36,18 @@ stdin.
 
 ## Commands
 
-| Command                 | What it does                                                                                                                                   |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `login`                 | Prompts for a token and stores it.                                                                                                             |
-| `logout`                | Deletes the stored token.                                                                                                                      |
-| `balance`               | Shows the minutes you can spend.                                                                                                               |
-| `transcribe <file>`     | Uploads a recording, waits, and prints the transcript. Flags: `--language`, `--translate es,de`, `--format srt\|vtt\|txt\|json`, `--out path`. |
-| `resume <token> <file>` | Finishes a transcription that `transcribe` left behind (see Interrupting). Flags: `--format`, `--out`.                                         |
-| `transcripts`           | Lists finished transcripts, newest first. Flag: `--limit` (default 20).                                                                        |
-| `transcript <id>`       | Prints one transcript. Flags: `--format`, `--lang` (a translation, or `cleaned`).                                                              |
-| `jobs`                  | Lists jobs. Flag: `--active` for the ones that have not finished.                                                                              |
-| `packs`                 | Lists the minute packs you can buy, with prices.                                                                                               |
-| `buy <pack>`            | Buys a pack with your saved default card. Flags: `--yes`, `--key`.                                                                             |
+| Command                 | What it does                                                                                                                                            |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `login`                 | Prompts for a token and stores it.                                                                                                                      |
+| `logout`                | Deletes the stored token.                                                                                                                               |
+| `balance`               | Shows the minutes you can spend.                                                                                                                        |
+| `transcribe <file>`     | Uploads a recording, waits, and prints the transcript. Flags: `--language`, `--translate es,de`, `--format srt\|vtt\|txt\|json`, `--out path`, `--key`. |
+| `resume <token> <file>` | Finishes a transcription that `transcribe` left behind (see Interrupting). Flags: `--format`, `--out`.                                                  |
+| `transcripts`           | Lists finished transcripts, newest first. Flag: `--limit` (default 20).                                                                                 |
+| `transcript <id>`       | Prints one transcript. Flags: `--format`, `--lang` (a translation, or `cleaned`).                                                                       |
+| `jobs`                  | Lists jobs. Flag: `--active` for the ones that have not finished.                                                                                       |
+| `packs`                 | Lists the minute packs you can buy, with prices.                                                                                                        |
+| `buy <pack>`            | Buys a pack with your saved default card. Flags: `--yes`, `--key`.                                                                                      |
 
 Global flags: `--json` and `--token`. The default format is `txt`. `--out` writes through a temporary
 file and a rename, so the target is never half written. The temporary file is created with the mode
@@ -60,7 +60,7 @@ does not exist is a usage error (exit code 2) and no job is created.
 
 `buy` shows the no-refund notice on stderr and asks you to confirm; a missing token is reported
 before it asks. With `--yes` the notice is still printed, before the purchase, also under `--json`.
-Without a terminal and without `--yes` it exits with code 2 and sends nothing:
+Without a terminal (stdin and stderr both) and without `--yes` it exits with code 2 and sends nothing:
 
 ```sh
 hushscript buy 300min --yes
@@ -86,6 +86,14 @@ that continues the job:
 
 ```sh
 hushscript resume <token> meeting.mp3 --format srt --out meeting.srt
+```
+
+When the run stopped before the API handed out a token, the message carries the idempotency key
+instead and names the command that replays the same `transcribe` call; the same key never creates
+the job twice:
+
+```sh
+hushscript transcribe --key <key> meeting.mp3
 ```
 
 `resume` takes the same recording and the same `--format`, `--out` and `--json` as `transcribe`; if
@@ -119,7 +127,7 @@ appear only when the error has one. The notice codes are `no_refund` (the `buy` 
 codes are `token_file_shared` (a stored token file other users can read) and `token_on_command_line`
 (`login --token`). Progress bars are drawn on stderr only when it is a terminal and `--json` is off.
 The one text that can still reach stderr under `--json` is a prompt (`login` asking for the token,
-`buy` asking to confirm): prompts are only shown when stdin is a terminal.
+`buy` asking to confirm): prompts are only shown when both stdin and stderr are terminals; otherwise pass the flags (`--yes`, `--token`) or pipe the token.
 
 | Exit code | Meaning                                                                                                            |
 | --------- | ------------------------------------------------------------------------------------------------------------------ |

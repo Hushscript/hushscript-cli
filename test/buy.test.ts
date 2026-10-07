@@ -16,13 +16,15 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
-function cli(options: { stdinIsTTY?: boolean; answer?: boolean } = {}): Harness {
+function cli(
+  options: { stdinIsTTY?: boolean; stderrIsTTY?: boolean; answer?: boolean } = {},
+): Harness {
   return harness({ home, env: { HUSHSCRIPT_TOKEN: TEST_TOKEN }, ...options });
 }
 
 describe("buy without --yes", () => {
   it("prints the no-refund notice, asks, and buys after a yes with the acknowledgement", async () => {
-    const h = cli({ stdinIsTTY: true, answer: true });
+    const h = cli({ stdinIsTTY: true, stderrIsTTY: true, answer: true });
     expect(await h.run("buy", "300min")).toBe(0);
     expect(h.stderr()).toContain(NO_REFUND_NOTICE);
     expect(h.prompts).toEqual(["Buy 300min with your saved default card? [y/N] "]);
@@ -34,14 +36,14 @@ describe("buy without --yes", () => {
   });
 
   it("buys nothing after a no", async () => {
-    const h = cli({ stdinIsTTY: true, answer: false });
+    const h = cli({ stdinIsTTY: true, stderrIsTTY: true, answer: false });
     expect(await h.run("buy", "300min")).toBe(1);
     expect(h.api.buy).not.toHaveBeenCalled();
     expect(h.stderr()).toContain("Cancelled. Nothing was charged.");
   });
 
   it("reports a missing token before asking anyone to confirm", async () => {
-    const h = harness({ home, stdinIsTTY: true, answer: true });
+    const h = harness({ home, stdinIsTTY: true, stderrIsTTY: true, answer: true });
     expect(await h.run("buy", "300min")).toBe(1);
     expect(h.stderr()).toContain("No Hushscript token.");
     expect(h.prompts).toEqual([]);
@@ -59,6 +61,17 @@ describe("buy without --yes", () => {
     expect(h.api.balance).not.toHaveBeenCalled();
   });
 
+  it("exits 2 with nothing sent when stdin is a terminal but stderr is piped", async () => {
+    const h = cli({ stdinIsTTY: true, stderrIsTTY: false, answer: true });
+    expect(await h.run("buy", "300min")).toBe(2);
+    expect(h.stderr()).toContain("Pass --yes");
+    expect(h.prompts).toEqual([]);
+    expect(h.api.buy).not.toHaveBeenCalled();
+    expect(await h.run("buy", "300min", "--yes")).toBe(0);
+    expect(h.prompts).toEqual([]);
+    expect(h.api.buy).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves stderr as one JSON document under --json when it cannot ask", async () => {
     const h = cli({ stdinIsTTY: false });
     expect(await h.run("buy", "300min", "--json")).toBe(2);
@@ -66,13 +79,13 @@ describe("buy without --yes", () => {
   });
 
   it("rejects a key that is not 1 to 128 of A-Za-z0-9_-", async () => {
-    const h = cli({ stdinIsTTY: true, answer: true });
+    const h = cli({ stdinIsTTY: true, stderrIsTTY: true, answer: true });
     expect(await h.run("buy", "300min", "--key", "no spaces")).toBe(2);
     expect(h.api.buy).not.toHaveBeenCalled();
   });
 
   it("keeps stdout clean under --json while it asks", async () => {
-    const h = cli({ stdinIsTTY: true, answer: true });
+    const h = cli({ stdinIsTTY: true, stderrIsTTY: true, answer: true });
     expect(await h.run("buy", "300min", "--json")).toBe(0);
     expect(JSON.parse(h.stdout())).toEqual({ seconds: 18_000, minutes: 300 });
     expect(h.stderr()).toContain(NO_REFUND_NOTICE);
@@ -107,6 +120,16 @@ describe("buy --yes", () => {
     await h.run("buy", "45min", "--yes");
     const [, options] = h.api.buy.mock.calls[0] ?? [];
     expect(options?.idempotencyKey).toMatch(UUID);
+  });
+
+  it("mints a fresh key for every run without --key", async () => {
+    const h = cli();
+    await h.run("buy", "45min", "--yes");
+    await h.run("buy", "45min", "--yes");
+    const [first, second] = h.api.buy.mock.calls.map(([, options]) => options?.idempotencyKey);
+    expect(first).toMatch(UUID);
+    expect(second).toMatch(UUID);
+    expect(first).not.toBe(second);
   });
 
   it("does not ask, still shows the notice, and passes --key on", async () => {

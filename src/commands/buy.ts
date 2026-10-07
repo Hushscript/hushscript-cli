@@ -48,7 +48,7 @@ export function registerBuy(program: Command, rt: Runtime): void {
       // The key is made here, not inside the SDK, so a signal that arrives mid-purchase can still print it.
       const key = options.key === undefined ? randomUUID() : parseKey(options.key);
       const confirmed = options.yes === true;
-      if (!confirmed && !io.stdinIsTTY) {
+      if (!confirmed && !(io.stdinIsTTY && io.stderrIsTTY)) {
         // Under --json the error object is the only stderr line: nothing could be bought, so there is no notice to give.
         if (!out.json) out.notice("no_refund", NO_REFUND_NOTICE);
         throw usageError(

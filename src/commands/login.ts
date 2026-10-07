@@ -11,6 +11,13 @@ export function registerLogin(program: Command, rt: Runtime): void {
     .action(async () => {
       const { deps, out } = rt;
       const supplied = rt.globals().token;
+      // A prompt needs a terminal on both ends; a terminal stdin with a piped stderr has no pipe to read either.
+      if (supplied === undefined && deps.io.stdinIsTTY && !deps.io.stderrIsTTY) {
+        throw usageError(
+          "There is no terminal to ask for the token on. Nothing was stored.",
+          "Pipe the token on stdin, or run login in a terminal.",
+        );
+      }
       const token = (supplied ?? (await deps.io.readSecret("Hushscript token: "))).trim();
       rt.secrets.push(token);
       if (token === "") throw usageError("No token was entered.");
