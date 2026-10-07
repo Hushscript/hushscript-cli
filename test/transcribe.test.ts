@@ -169,14 +169,73 @@ describe("Ctrl-C during transcribe", () => {
     expect(h.stderr()).toBe("Error: Interrupted.\n");
   });
 
-  it("forces the exit on a second Ctrl-C", async () => {
+  it("names the resume command with the file next to the token", async () => {
+    const h = cli();
+    hang(h, "rt-1", "rt-1");
+    const result = h.run("transcribe", file);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    h.interrupt();
+    await result;
+    expect(h.stderr()).toContain(`Hint: Continue with: hushscript resume rt-1 ${file}`);
+  });
+
+  it("quotes a file name the shell would split", async () => {
+    const spaced = join(home, "my call.mp3");
+    await writeFile(spaced, "audio");
+    const h = cli();
+    hang(h, "rt-1", "rt-1");
+    const result = h.run("transcribe", spaced);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    h.interrupt();
+    await result;
+    expect(h.stderr()).toContain(`hushscript resume rt-1 '${spaced}'`);
+  });
+
+  it("keeps the idempotency key the SDK error carries", async () => {
+    const h = cli();
+    h.api.transcribe.mockImplementation(
+      (_file, options) =>
+        new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => {
+            const error = new AbortError({ message: "Aborted.", resumeToken: "rt-4" });
+            error.idempotencyKey = "key-4";
+            reject(error);
+          });
+        }),
+    );
+    const result = h.run("transcribe", file, "--json");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    h.interrupt();
+    expect(await result).toBe(130);
+    expect(JSON.parse(h.stderr())).toMatchObject({ resumeToken: "rt-4", idempotencyKey: "key-4" });
+  });
+
+  it("prints the resume token and forces the exit on a second Ctrl-C", async () => {
     const h = cli();
     hang(h, "rt-3", "rt-3");
     const result = h.run("transcribe", file);
     await new Promise((resolve) => setTimeout(resolve, 10));
     h.interrupt();
     h.interrupt();
+    // Synchronously after the signal: the exit must not wait for the call to wind down.
     expect(h.forcedExits).toEqual([130]);
+    expect(h.stderr()).toContain("Resume token: rt-3");
+    expect(h.stderr()).toContain("hushscript resume rt-3");
+    await result;
+  });
+
+  it("forces the exit as JSON under --json", async () => {
+    const h = cli();
+    hang(h, "rt-5", "rt-5");
+    const result = h.run("transcribe", file, "--json");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    h.interrupt();
+    h.interrupt();
+    expect(h.forcedExits).toEqual([130]);
+    expect(JSON.parse(h.stderr().split("\n")[0] ?? "")).toMatchObject({
+      code: "interrupted",
+      resumeToken: "rt-5",
+    });
     await result;
   });
 
@@ -185,5 +244,72 @@ describe("Ctrl-C during transcribe", () => {
     await h.run("transcribe", file);
     h.interrupt();
     expect(h.forcedExits).toEqual([]);
+  });
+});
+
+describe("resume", () => {
+  it("finishes the job from the token and prints the transcript", async () => {
+    const h = cli();
+    expect(await h.run("resume", "rt-9", file, "--format", "srt")).toBe(0);
+    expect(h.stdout()).toBe(transcript().toSRT());
+    const [token, resumed] = h.api.resume.mock.calls[0] ?? [];
+    expect([token, resumed]).toEqual(["rt-9", file]);
+    expect(h.api.transcribe).not.toHaveBeenCalled();
+  });
+
+  it("writes --out and reports it as JSON under --json", async () => {
+    const h = cli();
+    const out = join(home, "again.json");
+    expect(await h.run("resume", "rt-9", file, "--json", "--out", out)).toBe(0);
+    expect(JSON.parse(h.stdout())).toEqual({ id: "tr_test_0001", format: "json", out });
+    expect(JSON.parse(await readFile(out, "utf8"))).toMatchObject({ id: "tr_test_0001" });
+  });
+
+  it("exits 2 for a missing file or a --format that contradicts --json, sending nothing", async () => {
+    const missing = cli();
+    expect(await missing.run("resume", "rt-9", join(home, "none.mp3"))).toBe(2);
+    const clash = cli();
+    expect(await clash.run("resume", "rt-9", file, "--json", "--format", "srt")).toBe(2);
+    expect(missing.api.resume).not.toHaveBeenCalled();
+    expect(clash.api.resume).not.toHaveBeenCalled();
+  });
+
+  it("needs both arguments", async () => {
+    expect(await cli().run("resume", "rt-9")).toBe(2);
+  });
+
+  it("passes SDK errors through with exit 1", async () => {
+    const h = cli();
+    h.api.resume.mockRejectedValue(new ApiError({ code: "not_found", message: "Gone." }));
+    expect(await h.run("resume", "rt-9", file)).toBe(1);
+    expect(h.stderr()).toContain("Error: Gone.");
+  });
+
+  it("prints the token it was given when interrupted again, before the SDK reports one", async () => {
+    const h = cli();
+    h.api.resume.mockImplementation(
+      (_token, _file, options) =>
+        new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => {
+            reject(new AbortError({ message: "Aborted.", resumeToken: null }));
+          });
+        }),
+    );
+    const result = h.run("resume", "rt-9", file);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    h.interrupt();
+    expect(await result).toBe(130);
+    expect(h.stderr()).toContain("Resume token: rt-9");
+    expect(h.stderr()).toContain(`hushscript resume rt-9 ${file}`);
+  });
+
+  it("draws progress on a terminal", async () => {
+    const h = cli({ stderrIsTTY: true });
+    h.api.resume.mockImplementation((_token, _file, options) => {
+      options?.onProgress?.({ stage: "processing", state: "queued" });
+      return Promise.resolve(transcript());
+    });
+    await h.run("resume", "rt-9", file);
+    expect(h.stderr()).toContain("Processing (queued)");
   });
 });

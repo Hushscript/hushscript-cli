@@ -12,6 +12,8 @@ function flush(stream: NodeJS.WriteStream): Promise<void> {
   );
 }
 
+const STOP_SIGNALS: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+
 const io: Io = {
   stdout: (text) => process.stdout.write(text),
   stderr: (text) => process.stderr.write(text),
@@ -26,10 +28,12 @@ const io: Io = {
       count += 1;
       handler(count);
     };
-    process.on("SIGINT", listener);
-    return () => process.off("SIGINT", listener);
+    for (const signal of STOP_SIGNALS) process.on(signal, listener);
+    return () => {
+      for (const signal of STOP_SIGNALS) process.off(signal, listener);
+    };
   },
-  // eslint-disable-next-line n/no-process-exit -- a second Ctrl-C must end the process at once
+  // eslint-disable-next-line n/no-process-exit -- an interrupted purchase and a second Ctrl-C must end the process at once
   forceExit: (code) => process.exit(code),
 };
 

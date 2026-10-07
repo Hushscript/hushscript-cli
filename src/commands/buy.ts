@@ -1,7 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { HushscriptError } from "@hushscript/sdk";
 import type { Command } from "commander";
 import { openClient, type Runtime } from "../context.ts";
-import { CliError, usageError } from "../errors.ts";
+import { CliError, interrupted, usageError } from "../errors.ts";
 import { parseKey, parsePack } from "../validate.ts";
 
 export const NO_REFUND_NOTICE =
@@ -10,11 +11,15 @@ export const NO_REFUND_NOTICE =
 // A purchase refused with one of these statuses was never charged; any other failure after the send may have been.
 const NEVER_CHARGED: ReadonlySet<number> = new Set([400, 401, 402, 403, 404, 422, 429]);
 
+function chargeNotice(key: string): string {
+  return `The purchase may have been charged; retry with --key ${key}.`;
+}
+
 function withChargeNotice(error: unknown): unknown {
   if (!(error instanceof HushscriptError)) return error;
   const key = error.idempotencyKey;
   if (key === null || (error.status !== null && NEVER_CHARGED.has(error.status))) return error;
-  const notice = `The purchase may have been charged; retry with --key ${key}.`;
+  const notice = chargeNotice(key);
   return new CliError({
     code: error.code,
     numericCode: error.numericCode,
@@ -40,34 +45,39 @@ export function registerBuy(program: Command, rt: Runtime): void {
       const { deps, out } = rt;
       const { io } = deps;
       const pack = parsePack(packArgument);
-      const key = options.key === undefined ? undefined : parseKey(options.key);
-      const asking = options.yes !== true && io.stdinIsTTY;
-      // Under --json stderr carries only the error document, so the notice is shown when someone is about to confirm it.
-      if (!out.json || asking) io.stderr(`${NO_REFUND_NOTICE}\n`);
-      if (options.yes !== true) {
-        if (!io.stdinIsTTY) {
-          throw usageError(
-            "Buying needs your confirmation, and there is no terminal to ask on. Nothing was sent.",
-            "Pass --yes to confirm the purchase.",
-          );
-        }
-        if (!(await io.confirm(`Buy ${pack} with your saved default card? [y/N] `))) {
-          throw new CliError({
-            code: "cancelled",
-            message: "Cancelled. Nothing was charged.",
-            exitCode: 1,
-          });
-        }
+      // The key is made here, not inside the SDK, so a signal that arrives mid-purchase can still print it.
+      const key = options.key === undefined ? randomUUID() : parseKey(options.key);
+      const confirmed = options.yes === true;
+      if (!confirmed && !io.stdinIsTTY) {
+        // Under --json stderr is the error document alone: there was no purchase to warn about.
+        if (!out.json) io.stderr(`${NO_REFUND_NOTICE}\n`);
+        throw usageError(
+          "Buying needs your confirmation, and there is no terminal to ask on. Nothing was sent.",
+          "Pass --yes to confirm the purchase.",
+        );
       }
+      // A missing token is reported before anyone is asked to confirm.
       const api = await openClient(rt);
+      // Shown whenever a purchase can follow, also with --yes and under --json.
+      io.stderr(`${NO_REFUND_NOTICE}\n`);
+      if (!confirmed && !(await io.confirm(`Buy ${pack} with your saved default card? [y/N] `))) {
+        throw new CliError({
+          code: "cancelled",
+          message: "Cancelled. Nothing was charged.",
+          exitCode: 1,
+        });
+      }
+      // From here the request may be on its way: a signal ends the process at once, with the key to retry.
+      const stop = io.onInterrupt(() => {
+        io.forceExit(out.fail(interrupted(null, key, chargeNotice(key))));
+      });
       let purchase;
       try {
-        purchase = await api.buy(pack, {
-          acknowledgeNoRefund: true,
-          ...(key === undefined ? {} : { idempotencyKey: key }),
-        });
+        purchase = await api.buy(pack, { acknowledgeNoRefund: true, idempotencyKey: key });
       } catch (error) {
         throw withChargeNotice(error);
+      } finally {
+        stop();
       }
       out.document(purchase, `Bought ${pack}. Balance: ${String(purchase.minutes)} min.`);
     });

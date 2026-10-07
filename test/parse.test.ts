@@ -159,6 +159,7 @@ describe("help and version", () => {
       "logout",
       "balance",
       "transcribe",
+      "resume",
       "transcripts",
       "transcript",
       "jobs",
@@ -181,6 +182,24 @@ describe("help and version", () => {
     const h = cli();
     expect(await h.run()).toBe(2);
     expect(h.stderr()).toContain("Usage: hushscript");
+  });
+
+  it("treats `help` like --help: the help on stdout and exit 0", async () => {
+    const h = cli();
+    expect(await h.run("help")).toBe(0);
+    expect(h.stdout()).toContain("Usage: hushscript");
+    expect(h.stderr()).toBe("");
+    const topic = cli();
+    expect(await topic.run("help", "buy")).toBe(0);
+    expect(topic.stdout()).toContain("Usage: hushscript buy");
+  });
+
+  it("reports a bare --json invocation as a JSON usage error and no help text", async () => {
+    const h = cli();
+    expect(await h.run("--json")).toBe(2);
+    expect(JSON.parse(h.stderr())).toMatchObject({ code: "usage_error" });
+    expect(h.stderr()).not.toContain("Usage:");
+    expect(h.stdout()).toBe("");
   });
 
   it("accepts the global flags after the command", async () => {

@@ -4,6 +4,7 @@ import type {
   Pack,
   Purchase,
   BuyOptions,
+  ResumeOptions,
   TranscribeOptions,
   Transcript,
   TranscriptSummary,
@@ -16,6 +17,7 @@ import { configPath, readStoredToken, resolveToken, type Environment } from "./s
 export interface Api {
   balance(): Promise<Balance>;
   transcribe(file: string, options?: TranscribeOptions): Promise<Transcript>;
+  resume(token: string, file?: string, options?: ResumeOptions): Promise<Transcript>;
   buy(packId: string, options?: BuyOptions): Promise<Purchase>;
   readonly transcripts: {
     list(options?: { pageSize?: number | undefined }): AsyncIterable<TranscriptSummary>;
@@ -45,7 +47,7 @@ export interface Io {
   readSecret(prompt: string): Promise<string>;
   /** Asks a yes/no question on the terminal; false for anything but yes. */
   confirm(prompt: string): Promise<boolean>;
-  /** Registers a Ctrl-C handler; the number is how many times it has fired. Returns the unsubscribe. */
+  /** Registers a handler for SIGINT, SIGTERM and SIGHUP; the number is how many signals have arrived. Returns the unsubscribe. */
   onInterrupt(handler: (count: number) => void): () => void;
   forceExit(code: number): void;
 }
@@ -77,7 +79,13 @@ export async function openClient(rt: Runtime): Promise<Api> {
   const token = await resolveToken({
     flag: rt.globals().token,
     env: deps.env,
-    stored: () => readStoredToken(storePath(deps)),
+    stored: () =>
+      readStoredToken(storePath(deps), {
+        platform: deps.platform,
+        warn: (text) => {
+          deps.io.stderr(`${text}\n`);
+        },
+      }),
   });
   if (token === null) {
     throw new CliError({

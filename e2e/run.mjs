@@ -1,6 +1,7 @@
 // Runs the built binary (dist/index.js) against the conformance mock this container shares a network with.
 // The mock accepts any bearer token that starts with "hsr" and serves the one-speaker transcript for a finished job.
 import { spawn, spawnSync } from "node:child_process";
+import { createServer } from "node:http";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -150,6 +151,7 @@ await step("buy --yes buys and acknowledges the notice", async () => {
   await freshMock();
   const result = cli(["buy", "300min", "--yes", "--json"], { env: withToken });
   expectStatus(result, 0);
+  expect(result.stderr.includes("non-refundable"), "the no-refund notice was not shown with --yes");
   const state = await mockJson("/__state").then(
     (value) => /** @type {{ purchases: { policyAck: boolean }[] }} */ (value),
   );
@@ -195,39 +197,149 @@ await step(
   },
 );
 
-await step("Ctrl-C during transcribe prints the resume token and exits 130", async () => {
-  await mock("/__scenario", {
-    mock: { account: { balance_seconds: 360_000 }, jobFlow: [{ state: "processing" }] },
-  });
-  const child = spawn(process.execPath, [BIN, "transcribe", sample, "--json"], {
-    env: {
-      PATH: process.env["PATH"] ?? "",
-      XDG_CONFIG_HOME: join(WORK, "config"),
-      HUSHSCRIPT_BASE_URL: BASE_URL,
-      HUSHSCRIPT_TOKEN: TOKEN,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+/** The environment of a CLI child that is signalled, which `cli()` cannot do because it waits for the exit. */
+const childEnv = {
+  PATH: process.env["PATH"] ?? "",
+  XDG_CONFIG_HOME: join(WORK, "config"),
+  HUSHSCRIPT_BASE_URL: BASE_URL,
+  HUSHSCRIPT_TOKEN: TOKEN,
+};
+
+/**
+ * Starts the CLI, waits until `ready()` says it is mid-call, signals it and returns how it ended.
+ * @param {string[]} args
+ * @param {NodeJS.Signals} signal
+ * @param {() => Promise<boolean>} ready
+ * @param {Record<string, string>} [env]
+ */
+async function signalled(args, signal, ready, env = childEnv) {
+  const child = spawn(process.execPath, [BIN, ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
   let stderr = "";
   child.stderr.on("data", (chunk) => {
     stderr += String(chunk);
   });
   /** @type {Promise<number | null>} */
   const exit = new Promise((resolve) => child.on("close", resolve));
-  // Wait until the job exists and the CLI is polling it, then interrupt.
-  for (let waited = 0; waited < 60_000; waited += 200) {
-    const state = /** @type {{ jobs: number }} */ (await mockJson("/__state"));
-    if (state.jobs > 0) break;
+  for (let waited = 0; waited < 60_000 && !(await ready()); waited += 200) {
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
   await new Promise((resolve) => setTimeout(resolve, 1000));
-  child.kill("SIGINT");
-  const status = await exit;
+  child.kill(signal);
+  return { status: await exit, stderr };
+}
+
+/** @param {NodeJS.Signals} signal */
+async function interruptTranscribe(signal) {
+  await mock("/__scenario", {
+    mock: {
+      account: { balance_seconds: 360_000 },
+      jobFlow: [{ state: "processing", untilClock: 200 }, { state: "done" }],
+    },
+  });
+  // Wait until the job exists and the CLI is polling it.
+  const result = await signalled(["transcribe", sample, "--json"], signal, async () => {
+    const state = /** @type {{ jobs: number }} */ (await mockJson("/__state"));
+    return state.jobs > 0;
+  });
+  const report = /** @type {{ code?: unknown, resumeToken?: unknown, hint?: unknown }} */ (
+    parse(result.stderr)
+  );
+  return { ...result, report };
+}
+
+for (const signal of /** @type {const} */ (["SIGINT", "SIGTERM", "SIGHUP"])) {
+  await step(`${signal} during transcribe prints the resume token and exits 130`, async () => {
+    const { status, stderr, report } = await interruptTranscribe(signal);
+    expect(status === 130, `exit ${String(status)}; stderr: ${stderr}`);
+    expect(report.code === "interrupted", `stderr: ${stderr}`);
+    expect(typeof report.resumeToken === "string" && report.resumeToken !== "", "no resume token");
+  });
+}
+
+await step("resume finishes an interrupted transcribe and prints the golden", async () => {
+  const { status, stderr, report } = await interruptTranscribe("SIGINT");
   expect(status === 130, `exit ${String(status)}; stderr: ${stderr}`);
-  const report = /** @type {{ code?: unknown, resumeToken?: unknown }} */ (parse(stderr));
-  expect(report.code === "interrupted", `stderr: ${stderr}`);
-  expect(typeof report.resumeToken === "string" && report.resumeToken !== "", "no resume token");
+  const token = String(report.resumeToken);
+  expect(
+    typeof report.hint === "string" && report.hint.includes(`hushscript resume ${token} `),
+    `the hint does not name the resume command: ${stderr}`,
+  );
+  await mock("/__clock", { advance: 300 });
+  const result = cli(["resume", token, sample, "--format", "srt"], { env: withToken });
+  expectStatus(result, 0);
+  expect(
+    result.stdout === golden,
+    "stdout differs from fixtures/exports/one-speaker.srt-captions.srt",
+  );
+  expect(result.stderr === "", `stderr is not empty: ${result.stderr}`);
 });
+
+for (const signal of /** @type {const} */ (["SIGINT", "SIGTERM", "SIGHUP"])) {
+  await step(`${signal} during buy prints the key of the purchase that was sent`, async () => {
+    /** @type {{ key: string | null }} */
+    const sent = { key: null };
+    const card = {
+      id: "pm_1",
+      type: "card",
+      brand: "visa",
+      last4: "4242",
+      exp_month: 1,
+      exp_year: 2099,
+      email: null,
+      is_default: true,
+      fast_checkout_eligible: true,
+    };
+    // Answers the card lookup and holds the purchase, so the CLI is mid-purchase when the signal lands.
+    const server = createServer((request, response) => {
+      if (request.method === "GET") {
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ default_id: "pm_1", methods: [card] }));
+        return;
+      }
+      let body = "";
+      request.on("data", (chunk) => {
+        body += String(chunk);
+      });
+      request.on("end", () => {
+        sent.key = String(
+          /** @type {{ idempotency_key?: unknown }} */ (parse(body)).idempotency_key,
+        );
+      });
+    });
+    await new Promise((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        resolve(undefined);
+      });
+    });
+    try {
+      const address = server.address();
+      const port = typeof address === "object" && address !== null ? address.port : 0;
+      const { status, stderr } = await signalled(
+        ["buy", "300min", "--yes", "--json"],
+        signal,
+        () => Promise.resolve(sent.key !== null),
+        { ...childEnv, HUSHSCRIPT_BASE_URL: `http://127.0.0.1:${String(port)}` },
+      );
+      expect(status === 130, `exit ${String(status)}; stderr: ${stderr}`);
+      const last = stderr.trimEnd().split("\n").at(-1) ?? "";
+      const report = /** @type {{ code?: unknown, idempotencyKey?: unknown, hint?: unknown }} */ (
+        parse(last)
+      );
+      expect(report.code === "interrupted", `stderr: ${stderr}`);
+      expect(
+        sent.key !== null && report.idempotencyKey === sent.key,
+        `printed key ${String(report.idempotencyKey)}, sent key ${String(sent.key)}`,
+      );
+      expect(
+        String(report.hint).includes(`retry with --key ${String(sent.key)}`),
+        `stderr: ${stderr}`,
+      );
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  });
+}
 
 await step("usage errors exit 2", () => {
   expectStatus(cli(["transcript", "tr_1", "--format", "docx"], { env: withToken }), 2);
