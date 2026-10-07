@@ -137,9 +137,8 @@ describe("writeFileAtomic", () => {
     const target = join(dir, "exec.sh");
     await writeFile(target, "old");
     await chmod(target, 0o755);
-    const before = process.umask();
+    const before = process.umask(0o077);
     try {
-      process.umask(0o077);
       await writeFileAtomic(target, "new", "hint");
     } finally {
       process.umask(before);

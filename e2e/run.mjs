@@ -216,19 +216,24 @@ const childEnv = {
  */
 async function signalled(args, signals, ready, options = {}) {
   const { env = childEnv, gap = 1000, stdin = "ignore" } = options;
-  const child = spawn(process.execPath, [BIN, ...args], { env, stdio: [stdin, "pipe", "pipe"] });
+  const child = spawn(process.execPath, [BIN, ...args], {
+    env,
+    stdio: [stdin, "pipe", "pipe"],
+  });
   let stdout = "";
   let stderr = "";
-  child.stdout.on("data", (chunk) => {
+  child.stdout?.on("data", (chunk) => {
     stdout += String(chunk);
   });
-  child.stderr.on("data", (chunk) => {
+  child.stderr?.on("data", (chunk) => {
     stderr += String(chunk);
   });
   /** @type {Promise<{ code: number | null, signal: NodeJS.Signals | null }>} */
-  const exit = new Promise((resolve) =>
-    child.on("close", (code, signal) => resolve({ code, signal })),
-  );
+  const exit = new Promise((resolve) => {
+    child.on("close", (code, signal) => {
+      resolve({ code, signal });
+    });
+  });
   for (let waited = 0; waited < 60_000 && !(await ready()); waited += 200) {
     await new Promise((resolve) => setTimeout(resolve, 200));
   }

@@ -120,7 +120,7 @@ export async function removeToken(path: string): Promise<boolean> {
 
 /** `--token ""` is a usage error, in every command that sees the flag. */
 export function rejectEmptyTokenFlag(flag: string | undefined): void {
-  if (flag !== undefined && flag.trim() === "") {
+  if (flag?.trim() === "") {
     throw usageError("--token is empty.", "Pass a token, or leave the flag out.");
   }
 }

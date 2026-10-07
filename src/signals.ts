@@ -1,7 +1,7 @@
 import type { Io } from "./context.ts";
 
 export const STOP_SIGNALS: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
-export const INTERRUPTED_EXIT = 130;
+const INTERRUPTED_EXIT = 130;
 
 /** What the interrupt logic needs from the process, so tests can stand in for it. */
 export interface Host {

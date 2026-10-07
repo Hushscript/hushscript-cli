@@ -96,7 +96,7 @@ describe("buy --yes", () => {
       return Promise.resolve({ seconds: 2700, minutes: 45 });
     });
     expect(await h.run("buy", "45min", "--yes", "--json")).toBe(0);
-    expect(order.map((text) => JSON.parse(text))).toEqual([
+    expect(order.map((text) => JSON.parse(text) as unknown)).toEqual([
       { type: "notice", code: "no_refund", message: NO_REFUND_NOTICE },
     ]);
     expect(JSON.parse(h.stdout())).toEqual({ seconds: 2700, minutes: 45 });
