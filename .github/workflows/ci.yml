@@ -1,0 +1,79 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: just ci (node ${{ matrix.node }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "24"]
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed # v2.22.0
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+            codeload.github.com:443
+            objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+            ghcr.io:443
+            pkg-containers.githubusercontent.com:443
+            registry-1.docker.io:443
+            auth.docker.io:443
+            production.cloudflare.docker.com:443
+            registry.npmjs.org:443
+            pypi.org:443
+            files.pythonhosted.org:443
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          path: cli
+      - name: Read the pinned conformance ref
+        id: conformance
+        run: echo "ref=$(jq -r .config.conformanceRef cli/package.json)" >> "$GITHUB_OUTPUT"
+      - name: Check out the conformance suite at the pinned ref
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: Hushscript/hushscript-sdk-conformance
+          ref: ${{ steps.conformance.outputs.ref }}
+          path: conformance
+      - name: Read the pinned SDK commit
+        id: sdk
+        run: echo "ref=$(tr -d '[:space:]' < cli/sdk-ref)" >> "$GITHUB_OUTPUT"
+      # Until @hushscript/sdk is on npm (docs/sdk-dependency.md), the gate packs the SDK from this commit.
+      - name: Check out the SDK at the pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          repository: Hushscript/hushscript-typescript
+          ref: ${{ steps.sdk.outputs.ref }}
+          path: sdk
+      - name: Install just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+      - name: Run just ci
+        working-directory: cli
+        env:
+          NODE_VERSION: ${{ matrix.node }}
+          CONFORMANCE_CONTEXT: ../conformance
+          SDK_DIR: ../sdk
+        run: just ci "$NODE_VERSION"

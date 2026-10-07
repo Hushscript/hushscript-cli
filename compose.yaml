@@ -1,0 +1,87 @@
+name: hushscript-cli
+
+x-hardening: &hardening
+  init: true
+  read_only: true
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  mem_limit: 4g
+  pids_limit: 512
+  labels:
+    sdk.test: "1"
+
+x-dev: &dev
+  <<: *hardening
+  build:
+    context: .
+    dockerfile: docker/dev.Dockerfile
+    target: dev
+    args:
+      NODE_VERSION: ${NODE_VERSION:?set by the justfile}
+  image: hushscript-cli-dev:node${NODE_VERSION:?set by the justfile}
+  working_dir: /work
+
+x-scratch: &scratch
+  - /tmp
+  - /work/node_modules/.vite
+  - /work/node_modules/.vite-temp
+  - /work/node_modules/.cache
+
+x-sandboxed: &sandboxed
+  <<: *dev
+  network_mode: "service:mock"
+  depends_on:
+    mock:
+      condition: service_healthy
+  tmpfs: *scratch
+
+services:
+  # The mock API every container below shares a network namespace with. Its network is internal,
+  # so the CLI reaches it at http://127.0.0.1:4010 and nothing else.
+  mock:
+    <<: *hardening
+    build:
+      context: ${CONFORMANCE_CONTEXT:?set by the justfile}
+      dockerfile: Dockerfile
+    image: hushscript-sdk-conformance-mock:pinned
+    mem_limit: 512m
+    pids_limit: 128
+    tmpfs:
+      - /tmp
+    networks:
+      - sdk
+
+  test:
+    <<: *sandboxed
+    command: ["timeout", "1800", "vitest", "run", "--coverage"]
+
+  lint:
+    <<: *sandboxed
+    command:
+      - sh
+      - -c
+      - >-
+        timeout 600 tsc --noEmit
+        && timeout 600 tsc --noEmit -p tsconfig.scripts.json
+        && timeout 600 eslint --max-warnings 0 .
+        && timeout 300 prettier --check .
+        && timeout 300 knip
+
+  # Builds the CLI (dist is a tmpfs) and runs the built binary against the mock.
+  e2e:
+    <<: *sandboxed
+    tmpfs:
+      - /tmp
+      - /work/dist
+    command:
+      - sh
+      - -c
+      - >-
+        cp tsup.config.ts /tmp/tsup.config.ts
+        && timeout 600 tsup --config /tmp/tsup.config.ts
+        && timeout 600 node e2e/run.mjs
+
+networks:
+  sdk:
+    internal: true
