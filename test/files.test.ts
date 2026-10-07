@@ -3,6 +3,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readdir,
   readFile,
   readlink,
@@ -13,12 +14,27 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { checkInputFile, checkOutputPath, writeFileAtomic } from "../src/files.ts";
+
+// Wraps open() so a test can see the mode the temp file was created with; everything still runs for real.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, open: vi.fn(actual.open) };
+});
+
+/** The mode argument of every temp-file open() so far. */
+function tempModes(): unknown[] {
+  return vi
+    .mocked(open)
+    .mock.calls.filter(([path]) => String(path).endsWith(".tmp"))
+    .map(([, , mode]) => mode);
+}
 
 let dir: string;
 
 beforeEach(async () => {
+  vi.mocked(open).mockClear();
   dir = await mkdtemp(join(tmpdir(), "hushscript-cli-"));
 });
 
@@ -51,6 +67,39 @@ describe("checkOutputPath", () => {
     await mkdir(join(dir, "sub"));
     await expect(checkOutputPath(join(dir, "sub"))).rejects.toMatchObject({ exitCode: 2 });
   });
+
+  it("follows a dangling link and refuses it when the folder it points into is missing", async () => {
+    const link = join(dir, "out.txt");
+    await symlink(join(dir, "missing", "deeper", "out.txt"), link);
+    await expect(checkOutputPath(link)).rejects.toMatchObject({
+      code: "usage_error",
+      exitCode: 2,
+    });
+    const chain = join(dir, "chain.txt");
+    await symlink("out.txt", chain);
+    await expect(checkOutputPath(chain)).rejects.toMatchObject({ exitCode: 2 });
+  });
+
+  it("accepts a link, dangling or not, that points into an existing folder", async () => {
+    await mkdir(join(dir, "real"));
+    await symlink(join("real", "later.txt"), join(dir, "dangling.txt"));
+    await expect(checkOutputPath(join(dir, "dangling.txt"))).resolves.toBeUndefined();
+    await writeFile(join(dir, "real", "now.txt"), "x");
+    await symlink(join("real", "now.txt"), join(dir, "live.txt"));
+    await expect(checkOutputPath(join(dir, "live.txt"))).resolves.toBeUndefined();
+  });
+
+  it("refuses a link to a folder and a loop of links as usage errors", async () => {
+    await mkdir(join(dir, "real"));
+    await symlink("real", join(dir, "folder-link"));
+    await expect(checkOutputPath(join(dir, "folder-link"))).rejects.toMatchObject({ exitCode: 2 });
+    await symlink("b.txt", join(dir, "a.txt"));
+    await symlink("a.txt", join(dir, "b.txt"));
+    await expect(checkOutputPath(join(dir, "a.txt"))).rejects.toMatchObject({
+      code: "usage_error",
+      exitCode: 2,
+    });
+  });
 });
 
 describe("writeFileAtomic", () => {
@@ -71,6 +120,30 @@ describe("writeFileAtomic", () => {
       expect((await stat(target)).mode & 0o7777).toBe(mode);
       expect(await readFile(target, "utf8")).toBe("new");
     }
+  });
+
+  it("opens the temp file with the final mode, before anything is written to it", async () => {
+    const existing = join(dir, "private.txt");
+    await writeFile(existing, "old");
+    await chmod(existing, 0o600);
+    await writeFileAtomic(existing, "new", "hint");
+    expect(tempModes()).toEqual([0o600]);
+    await writeFileAtomic(join(dir, "fresh.txt"), "new", "hint");
+    expect(tempModes()).toEqual([0o600, 0o644]);
+    expect((await stat(existing)).mode & 0o7777).toBe(0o600);
+  });
+
+  it("widens nothing for a target the umask would have narrowed", async () => {
+    const target = join(dir, "exec.sh");
+    await writeFile(target, "old");
+    await chmod(target, 0o755);
+    const before = process.umask(0o077);
+    try {
+      await writeFileAtomic(target, "new", "hint");
+    } finally {
+      process.umask(before);
+    }
+    expect((await stat(target)).mode & 0o7777).toBe(0o755);
   });
 
   it("writes through a symbolic link and leaves the link in place", async () => {

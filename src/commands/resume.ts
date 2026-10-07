@@ -26,6 +26,7 @@ export function registerResume(program: Command, rt: Runtime): void {
         format,
         out: options.out,
         resumeToken: token,
+        idempotencyKey: null,
         translateTo: undefined,
         start: (api, hooks) =>
           api.resume(token, file, { signal: hooks.signal, onProgress: hooks.onProgress }),

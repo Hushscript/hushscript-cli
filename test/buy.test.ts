@@ -81,7 +81,7 @@ describe("buy without --yes", () => {
 
 const UUID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/;
 
-/** The last line of stderr: under --yes the notice comes first, the error document last. */
+/** The last line of stderr: under --yes and --json the notice comes first, the error object last. */
 function errorDocument(h: Harness): Record<string, unknown> {
   const lines = h.stderr().trimEnd().split("\n");
   return JSON.parse(lines.at(-1) ?? "") as Record<string, unknown>;
@@ -96,7 +96,9 @@ describe("buy --yes", () => {
       return Promise.resolve({ seconds: 2700, minutes: 45 });
     });
     expect(await h.run("buy", "45min", "--yes", "--json")).toBe(0);
-    expect(order).toEqual([`${NO_REFUND_NOTICE}\n`]);
+    expect(order.map((text) => JSON.parse(text) as unknown)).toEqual([
+      { type: "notice", code: "no_refund", message: NO_REFUND_NOTICE },
+    ]);
     expect(JSON.parse(h.stdout())).toEqual({ seconds: 2700, minutes: 45 });
   });
 
@@ -133,7 +135,7 @@ describe("a purchase that fails", () => {
     expect(errorDocument(h)).toMatchObject({
       code: "network_error",
       idempotencyKey: "k-1",
-      hint: "The purchase may have been charged; retry with --key k-1.",
+      hint: "The purchase may have been sent. Retry with --key k-1: the same key never charges twice.",
     });
   });
 
@@ -144,7 +146,7 @@ describe("a purchase that fails", () => {
     );
     expect(errorDocument(h)).toMatchObject({
       status: 502,
-      hint: "Try later. The purchase may have been charged; retry with --key k-2.",
+      hint: "Try later. The purchase may have been sent. Retry with --key k-2: the same key never charges twice.",
     });
   });
 
@@ -187,7 +189,9 @@ describe("a purchase that fails", () => {
     h.interrupt();
     expect(h.forcedExits).toEqual([130]);
     expect(h.stderr()).toContain("Idempotency key: k-sig");
-    expect(h.stderr()).toContain("may have been charged; retry with --key k-sig.");
+    expect(h.stderr()).toContain(
+      "The purchase may have been sent. Retry with --key k-sig: the same key never charges twice.",
+    );
     release();
     await result;
   });
@@ -202,7 +206,26 @@ describe("a purchase that fails", () => {
     expect(errorDocument(h)).toMatchObject({
       code: "interrupted",
       idempotencyKey: expect.stringMatching(UUID) as string,
-      hint: expect.stringContaining("may have been charged; retry with --key") as string,
+      hint: expect.stringContaining("The purchase may have been sent. Retry with --key") as string,
+    });
+  });
+
+  it("prints the key with the interrupted error last, after the notice, as JSON Lines", async () => {
+    const h = cli();
+    h.api.buy.mockImplementation(() => new Promise(() => undefined));
+    void h.run("buy", "300min", "--yes", "--key", "k-lines", "--json");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    h.interrupt();
+    const lines = h
+      .stderr()
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(lines.map((line) => line["type"])).toEqual(["notice", "error"]);
+    expect(lines[1]).toMatchObject({
+      code: "interrupted",
+      idempotencyKey: "k-lines",
+      hint: "The purchase may have been sent. Retry with --key k-lines: the same key never charges twice.",
     });
   });
 
@@ -220,6 +243,8 @@ describe("a purchase that fails", () => {
     h.api.buy.mockRejectedValue(error);
     await h.run("buy", "300min", "--yes");
     expect(h.stderr()).toContain("Idempotency key: k-4");
-    expect(h.stderr()).toContain("may have been charged; retry with --key k-4.");
+    expect(h.stderr()).toContain(
+      "The purchase may have been sent. Retry with --key k-4: the same key never charges twice.",
+    );
   });
 });

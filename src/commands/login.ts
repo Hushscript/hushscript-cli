@@ -15,8 +15,9 @@ export function registerLogin(program: Command, rt: Runtime): void {
       rt.secrets.push(token);
       if (token === "") throw usageError("No token was entered.");
       if (supplied !== undefined) {
-        deps.io.stderr(
-          "Warning: a token on the command line can leak through shell history and the process list. Run `hushscript login` without --token to type it, or pipe it on stdin.\n",
+        out.warning(
+          "token_on_command_line",
+          "a token on the command line can leak through shell history and the process list. Run `hushscript login` without --token to type it, or pipe it on stdin.",
         );
       }
       // The SDK checks the format without sending anything; its error never carries the token.

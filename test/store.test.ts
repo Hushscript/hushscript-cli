@@ -134,7 +134,14 @@ describe("the token file", () => {
     await saveToken(path, TEST_TOKEN, "linux");
     await chmod(path, 0o644);
     expect(await h.run("balance", "--json")).toBe(0);
-    expect(h.stderr()).toBe(
+    expect(JSON.parse(h.stderr())).toEqual({
+      type: "warning",
+      code: "token_file_shared",
+      message: `${path} can be read by other users (mode 0644). Run: chmod 600 ${path}`,
+    });
+    const plain = harness({ home });
+    expect(await plain.run("balance")).toBe(0);
+    expect(plain.stderr()).toBe(
       `Warning: ${path} can be read by other users (mode 0644). Run: chmod 600 ${path}\n`,
     );
     expect(JSON.parse(h.stdout())).toMatchObject({ minutes: 300 });
@@ -272,6 +279,18 @@ describe("login and logout", () => {
     const h = harness({ home, secret: "\n" });
     expect(await h.run("login")).toBe(2);
     expect(await readStoredToken(file())).toBeNull();
+  });
+
+  it("logout with an empty --token is a usage error and leaves the stored token alone", async () => {
+    const h = harness({ home, secret: TEST_TOKEN });
+    await h.run("login");
+    for (const argv of [["--token", ""], ["--token="], ["--token", "  "]]) {
+      const again = harness({ home });
+      expect(await again.run("logout", ...argv)).toBe(2);
+      expect(again.stderr()).toContain("--token is empty");
+      expect(again.stdout()).toBe("");
+      expect(await readStoredToken(file())).toBe(TEST_TOKEN);
+    }
   });
 
   it("logout deletes the token and says so, also when there was none", async () => {

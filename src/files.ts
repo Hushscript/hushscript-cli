@@ -18,18 +18,28 @@ export async function checkInputFile(path: string): Promise<void> {
   if (!info.isFile()) throw usageError(`Not a file: ${path}`);
 }
 
-/** The folder of `--out` must exist and the target must not be a folder; checked before any request. */
+/**
+ * The folder the write will land in must exist and the target must not be a folder; checked before any
+ * request. A symbolic link is followed, also a dangling one, to the place the write ends up.
+ */
 export async function checkOutputPath(path: string): Promise<void> {
-  const folder = await statOrNull(dirname(resolve(path)));
-  if (folder?.isDirectory() !== true) {
-    throw usageError(`The folder for --out does not exist: ${dirname(path)}`);
+  let target: string;
+  try {
+    target = await resolveLinks(path);
+  } catch {
+    throw usageError(`--out is a loop of symbolic links: ${path}`);
   }
-  if ((await statOrNull(path))?.isDirectory() === true) {
+  const folder = await statOrNull(dirname(resolve(target)));
+  if (folder?.isDirectory() !== true) {
+    throw usageError(`The folder for --out does not exist: ${dirname(target)}`);
+  }
+  if ((await statOrNull(target))?.isDirectory() === true) {
     throw usageError(`--out is a folder, not a file: ${path}`);
   }
 }
 
 const MAX_LINK_HOPS = 40;
+const NEW_FILE_MODE = 0o644;
 
 /** Follows symbolic links, also dangling ones, to the path a write should land on. */
 async function resolveLinks(path: string): Promise<string> {
@@ -52,10 +62,13 @@ export async function writeFileAtomic(path: string, content: string, hint: strin
     const target = await resolveLinks(path);
     const existing = await statOrNull(target);
     temp = join(dirname(target), `.${basename(target)}.${randomBytes(6).toString("hex")}.tmp`);
-    const handle = await open(temp, "wx");
+    // The temp file starts out with the mode the target will have, so the content is never readable more widely than that.
+    const mode = existing === null ? NEW_FILE_MODE : Number(existing.mode) & 0o7777;
+    const handle = await open(temp, "wx", mode);
     try {
+      // open() applies the umask; an existing target keeps exactly its own bits.
+      if (existing !== null) await handle.chmod(mode);
       await handle.writeFile(content);
-      if (existing !== null) await handle.chmod(Number(existing.mode) & 0o7777);
     } finally {
       await handle.close();
     }

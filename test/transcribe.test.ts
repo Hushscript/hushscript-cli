@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AbortError, ApiError, type TranscribeOptions } from "@hushscript/sdk";
@@ -18,6 +18,8 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
+const UUID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/;
+
 function cli(options: { stderrIsTTY?: boolean } = {}): Harness {
   return harness({ home, env: { HUSHSCRIPT_TOKEN: TEST_TOKEN }, ...options });
 }
@@ -35,6 +37,7 @@ describe("transcribe", () => {
     expect(h.stdout()).toBe(transcript().toText());
     expect(h.api.transcribe.mock.calls[0]?.[0]).toBe(file);
     expect(requestOf(h)).toMatchObject({ language: "en", translateTo: ["es", "de"] });
+    expect(requestOf(h).idempotencyKey).toMatch(UUID);
     expect(requestOf(h).onProgress).toBeUndefined();
     expect(h.stderr()).toContain("hushscript transcript tr_test_0001 --lang es");
   });
@@ -45,6 +48,18 @@ describe("transcribe", () => {
     expect(requestOf(h).language).toBeUndefined();
     expect(requestOf(h).translateTo).toBeUndefined();
     expect(h.stderr()).toBe("");
+  });
+
+  it("exits 2 before any request when --out is a link into a missing folder", async () => {
+    const link = join(home, "out.srt");
+    await symlink(join(home, "missing", "out.srt"), link);
+    const h = cli();
+    expect(await h.run("transcribe", file, "--out", link)).toBe(2);
+    expect(h.created).toEqual([]);
+    expect(h.api.transcribe).not.toHaveBeenCalled();
+    const again = cli();
+    expect(await again.run("resume", "rt-9", file, "--out", link)).toBe(2);
+    expect(again.api.resume).not.toHaveBeenCalled();
   });
 
   it("prints srt as the SDK renders it", async () => {
@@ -166,7 +181,7 @@ describe("Ctrl-C during transcribe", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     h.interrupt();
     expect(await result).toBe(130);
-    expect(h.stderr()).toBe("Error: Interrupted.\n");
+    expect(h.stderr()).toMatch(/^Error: Interrupted\.\nIdempotency key: [\da-f-]{36}\n$/);
   });
 
   it("names the resume command with the file next to the token", async () => {
@@ -208,6 +223,33 @@ describe("Ctrl-C during transcribe", () => {
     h.interrupt();
     expect(await result).toBe(130);
     expect(JSON.parse(h.stderr())).toMatchObject({ resumeToken: "rt-4", idempotencyKey: "key-4" });
+  });
+
+  it("falls back to the key the CLI minted when the SDK error has none", async () => {
+    const h = cli();
+    hang(h, "rt-6", null);
+    const result = h.run("transcribe", file, "--json");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    h.interrupt();
+    expect(await result).toBe(130);
+    expect(JSON.parse(h.stderr())).toMatchObject({ idempotencyKey: requestOf(h).idempotencyKey });
+  });
+
+  it("keeps the key on a second Ctrl-C, the one the call was started with", async () => {
+    const h = cli();
+    hang(h, "rt-7", "rt-7");
+    const result = h.run("transcribe", file, "--json");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    h.interrupt();
+    h.interrupt();
+    expect(h.forcedExits).toEqual([130]);
+    const report = JSON.parse(h.stderr().split("\n")[0] ?? "") as Record<string, unknown>;
+    expect(report).toMatchObject({
+      resumeToken: "rt-7",
+      idempotencyKey: requestOf(h).idempotencyKey,
+    });
+    expect(report["idempotencyKey"]).toMatch(UUID);
+    await result;
   });
 
   it("prints the resume token and forces the exit on a second Ctrl-C", async () => {

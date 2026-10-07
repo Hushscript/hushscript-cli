@@ -12,7 +12,7 @@ export const NO_REFUND_NOTICE =
 const NEVER_CHARGED: ReadonlySet<number> = new Set([400, 401, 402, 403, 404, 422, 429]);
 
 function chargeNotice(key: string): string {
-  return `The purchase may have been charged; retry with --key ${key}.`;
+  return `The purchase may have been sent. Retry with --key ${key}: the same key never charges twice.`;
 }
 
 function withChargeNotice(error: unknown): unknown {
@@ -49,8 +49,8 @@ export function registerBuy(program: Command, rt: Runtime): void {
       const key = options.key === undefined ? randomUUID() : parseKey(options.key);
       const confirmed = options.yes === true;
       if (!confirmed && !io.stdinIsTTY) {
-        // Under --json stderr is the error document alone: there was no purchase to warn about.
-        if (!out.json) io.stderr(`${NO_REFUND_NOTICE}\n`);
+        // Under --json the error object is the only stderr line: nothing could be bought, so there is no notice to give.
+        if (!out.json) out.notice("no_refund", NO_REFUND_NOTICE);
         throw usageError(
           "Buying needs your confirmation, and there is no terminal to ask on. Nothing was sent.",
           "Pass --yes to confirm the purchase.",
@@ -59,7 +59,7 @@ export function registerBuy(program: Command, rt: Runtime): void {
       // A missing token is reported before anyone is asked to confirm.
       const api = await openClient(rt);
       // Shown whenever a purchase can follow, also with --yes and under --json.
-      io.stderr(`${NO_REFUND_NOTICE}\n`);
+      out.notice("no_refund", NO_REFUND_NOTICE);
       if (!confirmed && !(await io.confirm(`Buy ${pack} with your saved default card? [y/N] `))) {
         throw new CliError({
           code: "cancelled",

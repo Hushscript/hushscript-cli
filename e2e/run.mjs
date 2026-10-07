@@ -4,6 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const BASE_URL = "http://127.0.0.1:4010";
 const TOKEN = `hsr1:eu:pat.${"0123456789abcdef".repeat(2)}.${"fedcba9876543210".repeat(4)}`;
@@ -206,26 +207,45 @@ const childEnv = {
 };
 
 /**
- * Starts the CLI, waits until `ready()` says it is mid-call, signals it and returns how it ended.
+ * Starts the CLI, waits until `ready()` says it is mid-call, signals it (each signal of `signals` in turn,
+ * `gap` milliseconds apart) and returns how it ended.
  * @param {string[]} args
- * @param {NodeJS.Signals} signal
+ * @param {NodeJS.Signals[]} signals
  * @param {() => Promise<boolean>} ready
- * @param {Record<string, string>} [env]
+ * @param {{ env?: Record<string, string>, gap?: number, stdin?: "ignore" | "pipe" }} [options]
  */
-async function signalled(args, signal, ready, env = childEnv) {
-  const child = spawn(process.execPath, [BIN, ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
+async function signalled(args, signals, ready, options = {}) {
+  const { env = childEnv, gap = 1000, stdin = "ignore" } = options;
+  const child = spawn(process.execPath, [BIN, ...args], {
+    env,
+    stdio: [stdin, "pipe", "pipe"],
+  });
+  let stdout = "";
   let stderr = "";
-  child.stderr.on("data", (chunk) => {
+  child.stdout?.on("data", (chunk) => {
+    stdout += String(chunk);
+  });
+  child.stderr?.on("data", (chunk) => {
     stderr += String(chunk);
   });
-  /** @type {Promise<number | null>} */
-  const exit = new Promise((resolve) => child.on("close", resolve));
+  /** @type {Promise<{ code: number | null, signal: NodeJS.Signals | null }>} */
+  const exit = new Promise((resolve) => {
+    child.on("close", (code, signal) => {
+      resolve({ code, signal });
+    });
+  });
   for (let waited = 0; waited < 60_000 && !(await ready()); waited += 200) {
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  await new Promise((resolve) => setTimeout(resolve, 1000));
-  child.kill(signal);
-  return { status: await exit, stderr };
+  /** What the child had printed before each signal after the first one. */
+  const before = [];
+  for (const [index, signal] of signals.entries()) {
+    await new Promise((resolve) => setTimeout(resolve, gap));
+    if (index > 0) before.push(stderr);
+    child.kill(signal);
+  }
+  const ended = await exit;
+  return { status: ended.code, killedBy: ended.signal, stdout, stderr, before };
 }
 
 /** @param {NodeJS.Signals} signal */
@@ -237,7 +257,7 @@ async function interruptTranscribe(signal) {
     },
   });
   // Wait until the job exists and the CLI is polling it.
-  const result = await signalled(["transcribe", sample, "--json"], signal, async () => {
+  const result = await signalled(["transcribe", sample, "--json"], [signal], async () => {
     const state = /** @type {{ jobs: number }} */ (await mockJson("/__state"));
     return state.jobs > 0;
   });
@@ -255,6 +275,52 @@ for (const signal of /** @type {const} */ (["SIGINT", "SIGTERM", "SIGHUP"])) {
     expect(typeof report.resumeToken === "string" && report.resumeToken !== "", "no resume token");
   });
 }
+
+await step(
+  "a second signal during the wind-down prints the token and the key and exits 130",
+  async () => {
+    await mock("/__scenario", {
+      mock: {
+        account: { balance_seconds: 360_000 },
+        jobFlow: [{ state: "processing", untilClock: 200 }, { state: "done" }],
+      },
+    });
+    // The preload delays AbortController.abort() by a minute, so the first signal's wind-down never ends
+    // inside the test and only the second signal's own path can produce the report.
+    const preload = fileURLToPath(new URL("slow-abort.mjs", import.meta.url));
+    const env = { ...childEnv, NODE_OPTIONS: `--import=${preload}` };
+    const started = Date.now();
+    const result = await signalled(
+      ["transcribe", sample, "--json"],
+      ["SIGINT", "SIGINT"],
+      async () => {
+        const state = /** @type {{ jobs: number }} */ (await mockJson("/__state"));
+        return state.jobs > 0;
+      },
+      { env },
+    );
+    expect(result.before[0] === "", `the first signal alone printed: ${result.before[0] ?? ""}`);
+    expect(result.status === 130, `exit ${String(result.status)}; stderr: ${result.stderr}`);
+    expect(Date.now() - started < 30_000, "the exit waited for the abort");
+    const lines = result.stderr.trimEnd().split("\n");
+    expect(lines.length === 1, `stderr: ${result.stderr}`);
+    const report =
+      /** @type {{ code?: unknown, resumeToken?: unknown, idempotencyKey?: unknown, hint?: unknown }} */ (
+        parse(lines[0] ?? "")
+      );
+    expect(report.code === "interrupted", `stderr: ${result.stderr}`);
+    expect(typeof report.resumeToken === "string" && report.resumeToken !== "", "no resume token");
+    expect(
+      typeof report.idempotencyKey === "string" && report.idempotencyKey !== "",
+      `no idempotency key: ${result.stderr}`,
+    );
+    expect(
+      typeof report.hint === "string" &&
+        report.hint.includes(`hushscript resume ${String(report.resumeToken)} `),
+      `no resume command: ${result.stderr}`,
+    );
+  },
+);
 
 await step("resume finishes an interrupted transcribe and prints the golden", async () => {
   const { status, stderr, report } = await interruptTranscribe("SIGINT");
@@ -274,72 +340,144 @@ await step("resume finishes an interrupted transcribe and prints the golden", as
   expect(result.stderr === "", `stderr is not empty: ${result.stderr}`);
 });
 
-for (const signal of /** @type {const} */ (["SIGINT", "SIGTERM", "SIGHUP"])) {
-  await step(`${signal} during buy prints the key of the purchase that was sent`, async () => {
-    /** @type {{ key: string | null }} */
-    const sent = { key: null };
-    const card = {
-      id: "pm_1",
-      type: "card",
-      brand: "visa",
-      last4: "4242",
-      exp_month: 1,
-      exp_year: 2099,
-      email: null,
-      is_default: true,
-      fast_checkout_eligible: true,
-    };
-    // Answers the card lookup and holds the purchase, so the CLI is mid-purchase when the signal lands.
-    const server = createServer((request, response) => {
-      if (request.method === "GET") {
-        response.setHeader("content-type", "application/json");
-        response.end(JSON.stringify({ default_id: "pm_1", methods: [card] }));
-        return;
-      }
-      let body = "";
-      request.on("data", (chunk) => {
-        body += String(chunk);
-      });
-      request.on("end", () => {
-        sent.key = String(
-          /** @type {{ idempotency_key?: unknown }} */ (parse(body)).idempotency_key,
-        );
-      });
-    });
-    await new Promise((resolve) => {
-      server.listen(0, "127.0.0.1", () => {
-        resolve(undefined);
-      });
-    });
-    try {
-      const address = server.address();
-      const port = typeof address === "object" && address !== null ? address.port : 0;
-      const { status, stderr } = await signalled(
-        ["buy", "300min", "--yes", "--json"],
-        signal,
-        () => Promise.resolve(sent.key !== null),
-        { ...childEnv, HUSHSCRIPT_BASE_URL: `http://127.0.0.1:${String(port)}` },
-      );
-      expect(status === 130, `exit ${String(status)}; stderr: ${stderr}`);
-      const last = stderr.trimEnd().split("\n").at(-1) ?? "";
-      const report = /** @type {{ code?: unknown, idempotencyKey?: unknown, hint?: unknown }} */ (
-        parse(last)
-      );
-      expect(report.code === "interrupted", `stderr: ${stderr}`);
-      expect(
-        sent.key !== null && report.idempotencyKey === sent.key,
-        `printed key ${String(report.idempotencyKey)}, sent key ${String(sent.key)}`,
-      );
-      expect(
-        String(report.hint).includes(`retry with --key ${String(sent.key)}`),
-        `stderr: ${stderr}`,
-      );
-    } finally {
-      server.closeAllConnections();
-      server.close();
+/**
+ * A fake API for `buy`: answers the card lookup unless it is told to hold it, and always holds the purchase,
+ * so the CLI is mid-purchase (or mid-lookup) when the signal lands.
+ * @param {"lookup" | "purchase"} hold
+ */
+async function buyServer(hold) {
+  /** @type {{ key: string | null, lookups: number }} */
+  const seen = { key: null, lookups: 0 };
+  const card = {
+    id: "pm_1",
+    type: "card",
+    brand: "visa",
+    last4: "4242",
+    exp_month: 1,
+    exp_year: 2099,
+    email: null,
+    is_default: true,
+    fast_checkout_eligible: true,
+  };
+  const server = createServer((request, response) => {
+    if (request.method === "GET") {
+      seen.lookups += 1;
+      if (hold === "lookup") return;
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ default_id: "pm_1", methods: [card] }));
+      return;
     }
+    let body = "";
+    request.on("data", (chunk) => {
+      body += String(chunk);
+    });
+    request.on("end", () => {
+      seen.key = String(/** @type {{ idempotency_key?: unknown }} */ (parse(body)).idempotency_key);
+    });
+  });
+  await new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      resolve(undefined);
+    });
+  });
+  const address = server.address();
+  const port = typeof address === "object" && address !== null ? address.port : 0;
+  return { server, seen, baseUrl: `http://127.0.0.1:${String(port)}` };
+}
+
+for (const signal of /** @type {const} */ (["SIGINT", "SIGTERM", "SIGHUP"])) {
+  for (const hold of /** @type {const} */ (["lookup", "purchase"])) {
+    await step(`${signal} while buy holds the ${hold} prints the key to retry with`, async () => {
+      const { server, seen, baseUrl } = await buyServer(hold);
+      try {
+        const key = `e2e-key-${hold}`;
+        const { status, stderr } = await signalled(
+          ["buy", "300min", "--yes", "--key", key, "--json"],
+          [signal],
+          () => Promise.resolve(hold === "lookup" ? seen.lookups > 0 : seen.key !== null),
+          { env: { ...childEnv, HUSHSCRIPT_BASE_URL: baseUrl } },
+        );
+        expect(status === 130, `exit ${String(status)}; stderr: ${stderr}`);
+        const last = stderr.trimEnd().split("\n").at(-1) ?? "";
+        const report =
+          /** @type {{ type?: unknown, code?: unknown, idempotencyKey?: unknown, hint?: unknown }} */ (
+            parse(last)
+          );
+        expect(report.type === "error" && report.code === "interrupted", `stderr: ${stderr}`);
+        expect(report.idempotencyKey === key, `printed key ${String(report.idempotencyKey)}`);
+        expect(
+          report.hint ===
+            `The purchase may have been sent. Retry with --key ${key}: the same key never charges twice.`,
+          `stderr: ${stderr}`,
+        );
+        if (hold === "purchase") expect(seen.key === key, `sent key ${String(seen.key)}`);
+        else expect(seen.key === null, "a purchase was sent");
+      } finally {
+        server.closeAllConnections();
+        server.close();
+      }
+    });
+  }
+}
+
+for (const signal of /** @type {const} */ (["SIGINT", "SIGTERM", "SIGHUP"])) {
+  await step(`${signal} outside any request exits 130 with nothing printed`, async () => {
+    // `login` waits on a stdin pipe that is never written to: nothing was sent and no interrupt window is open.
+    const { status, killedBy, stdout, stderr } = await signalled(
+      ["login", "--json"],
+      [signal],
+      () => Promise.resolve(true),
+      { stdin: "pipe" },
+    );
+    expect(
+      status === 130,
+      `exit ${String(status)} (killed by ${String(killedBy)}); stderr: ${stderr}`,
+    );
+    expect(stdout === "" && stderr === "", `output: ${stdout} / ${stderr}`);
   });
 }
+
+await step("every stderr line under --json is JSON, the error object last", async () => {
+  await freshMock();
+  const buy = cli(["buy", "300min", "--yes", "--json"], { env: withToken });
+  expectStatus(buy, 0);
+  const noToken = cli(["balance", "--json"]);
+  const usage = cli(["transcript", "tr_1", "--format", "docx", "--json"], { env: withToken });
+  const login = cli(["login", "--token", TOKEN, "--json"]);
+  expectStatus(login, 0);
+  expectStatus(cli(["logout"]), 0);
+  /** @type {[string, string, string[]][]} */
+  const cases = [
+    ["buy --yes", buy.stderr, ["notice"]],
+    ["no token", noToken.stderr, ["error"]],
+    ["usage error", usage.stderr, ["error"]],
+    ["login --token", login.stderr, ["warning"]],
+  ];
+  for (const [name, stderr, expected] of cases) {
+    const types = stderr
+      .trimEnd()
+      .split("\n")
+      .map((line) => String(/** @type {{ type?: unknown }} */ (parse(line)).type));
+    expect(
+      types.join() === expected.join(),
+      `${name}: stderr types ${types.join()}, wanted ${expected.join()}: ${stderr}`,
+    );
+  }
+  const version = cli(["--version", "--json"]);
+  expectStatus(version, 0);
+  expect(
+    /** @type {{ version?: unknown }} */ (parse(version.stdout)).version !== undefined &&
+      version.stderr === "",
+    `--version --json: ${version.stdout}`,
+  );
+  const help = cli(["--help", "--json"]);
+  expectStatus(help, 0);
+  expect(
+    typeof (/** @type {{ help?: unknown }} */ (parse(help.stdout)).help) === "string" &&
+      help.stderr === "",
+    `--help --json: ${help.stdout}`,
+  );
+});
 
 await step("usage errors exit 2", () => {
   expectStatus(cli(["transcript", "tr_1", "--format", "docx"], { env: withToken }), 2);
