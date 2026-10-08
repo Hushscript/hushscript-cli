@@ -152,6 +152,14 @@ The one text that can still reach stderr under `--json` is a prompt (`login` ask
 | 2         | Usage error: unknown command or flag, a bad value, `buy` without a terminal and without `--yes`. Nothing was sent. |
 | 130       | Interrupted by SIGINT, SIGTERM or SIGHUP, at any moment of the run.                                                |
 
+## Links
+
+- Documentation: <https://hushscript.com/sdks>
+- REST API reference: <https://hushscript.com/developers>
+- Package on npm: <https://www.npmjs.com/package/@hushscript/cli>
+- Source: <https://github.com/Hushscript/hushscript-cli>
+- Other Hushscript SDKs: [TypeScript](https://github.com/Hushscript/hushscript-typescript), [Python](https://github.com/Hushscript/hushscript-python), [Go](https://github.com/Hushscript/hushscript-go), [PHP](https://github.com/Hushscript/hushscript-php)
+
 ## Development
 
 Everything runs in containers, through `just`: `just ci` runs the static checks, the tests and the
