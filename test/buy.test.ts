@@ -1,7 +1,13 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ApiError, NetworkError, PaymentMethodRequiredError } from "@hushscript/sdk";
+import {
+  ApiError,
+  HushscriptError,
+  Hushscript,
+  NetworkError,
+  PaymentMethodRequiredError,
+} from "@hushscript/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { run } from "../src/program.ts";
 import { installInterrupts } from "../src/signals.ts";
@@ -218,9 +224,13 @@ describe("buy without --yes", () => {
     },
   );
 
-  it.each(["SIGINT", "SIGTERM", "SIGHUP"] as const)(
-    "exits silently on %s during the confirm prompt before buying",
-    async (signal) => {
+  it.each(
+    (["SIGINT", "SIGTERM", "SIGHUP"] as const).flatMap((signal) =>
+      [false, true].map((json) => ({ signal, json })),
+    ),
+  )(
+    "exits silently on $signal during the confirm prompt before buying (json: $json)",
+    async ({ signal, json }) => {
       const h = cli();
       const listeners = new Map<NodeJS.Signals, () => void>();
       const exit = vi.fn();
@@ -237,7 +247,7 @@ describe("buy without --yes", () => {
         },
         exit,
       });
-      void run(["buy", "300min"], {
+      void run(json ? ["buy", "300min", "--json"] : ["buy", "300min"], {
         homedir: home,
         platform: "linux",
         env: { HUSHSCRIPT_TOKEN: TEST_TOKEN },
@@ -266,7 +276,11 @@ describe("buy without --yes", () => {
       expect(h.api.buy).not.toHaveBeenCalled();
       expect(stdout).not.toHaveBeenCalled();
       expect(stderr.mock.calls).toEqual([
-        [`${NO_REFUND_NOTICE}\n`],
+        [
+          json
+            ? `${JSON.stringify({ type: "notice", code: "no_refund", message: NO_REFUND_NOTICE })}\n`
+            : `${NO_REFUND_NOTICE}\n`,
+        ],
         ["Buy 300min with your saved default card? [y/N] "],
       ]);
     },
@@ -513,6 +527,112 @@ describe("a purchase that fails", () => {
     h.interrupt();
     expect(h.forcedExits).toEqual([]);
     expect(h.stderr()).toBe(stderr);
+  });
+
+  describe("R103: the charge notice follows the key the SDK attaches", () => {
+    const NOTICE_FRAGMENT = "may have been sent";
+
+    function sdkClient(): Harness {
+      return harness({
+        home,
+        env: { HUSHSCRIPT_TOKEN: TEST_TOKEN },
+        client: ({ token }) =>
+          new Hushscript({ token, baseUrl: "http://127.0.0.1:4010", maxRetries: 0 }),
+      });
+    }
+
+    function stubPurchase(purchase: () => Promise<Response>): void {
+      vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+        const request = new Request(input, init);
+        await request.text();
+        if (new URL(request.url).pathname === "/v1/billing/cards") {
+          return Response.json({
+            default_id: "pm_1",
+            methods: [
+              {
+                id: "pm_1",
+                type: "card",
+                brand: "visa",
+                last4: "4242",
+                exp_month: 12,
+                exp_year: 2099,
+                email: null,
+                is_default: true,
+                fast_checkout_eligible: true,
+              },
+            ],
+          });
+        }
+        return await purchase();
+      });
+    }
+
+    function refused(): TypeError {
+      return new TypeError("fetch failed", {
+        cause: Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" }),
+      });
+    }
+
+    function reset(): TypeError {
+      return new TypeError("fetch failed", {
+        cause: Object.assign(new Error("ECONNRESET"), { code: "ECONNRESET" }),
+      });
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("prints no key and no charge notice when the connection was refused", async () => {
+      stubPurchase(() => Promise.reject(refused()));
+      const h = sdkClient();
+      expect(await h.run("buy", "300min", "--yes")).toBe(1);
+      expect(h.stderr()).toBe(
+        `${NO_REFUND_NOTICE}\nError: The request failed before a response arrived (TypeError: fetch failed; code ECONNREFUSED).\n`,
+      );
+    });
+
+    it("prints the key and the charge notice when the connection dropped after the send", async () => {
+      stubPurchase(() => Promise.reject(reset()));
+      const h = sdkClient();
+      expect(await h.run("buy", "300min", "--yes", "--key", "k-reset")).toBe(1);
+      expect(h.stderr()).toBe(
+        `${NO_REFUND_NOTICE}\nError: The request failed before a response arrived (TypeError: fetch failed; code ECONNRESET).\n` +
+          "Hint: The purchase may have been sent. Retry with --key k-reset: the same key never charges twice.\n" +
+          "Idempotency key: k-reset\n",
+      );
+    });
+
+    it("prints no charge notice for a failure the SDK says came before the request was sent", async () => {
+      const h = cli();
+      h.api.buy.mockRejectedValue(
+        new HushscriptError({
+          code: "unexpected_error",
+          message: "The SDK failed unexpectedly before the request was sent (TypeError: boom).",
+        }),
+      );
+      expect(await h.run("buy", "300min", "--yes")).toBe(1);
+      expect(h.stderr()).toBe(
+        `${NO_REFUND_NOTICE}\nError: The SDK failed unexpectedly before the request was sent (TypeError: boom).\n`,
+      );
+      expect(h.stderr()).not.toContain(NOTICE_FRAGMENT);
+    });
+
+    it("prints the notice for a failure the SDK says came after the request was sent", async () => {
+      const h = cli();
+      const error = new HushscriptError({
+        code: "unexpected_error",
+        message: "The SDK failed unexpectedly after the request was sent (TypeError: boom).",
+      });
+      error.idempotencyKey = "k-after";
+      h.api.buy.mockRejectedValue(error);
+      expect(await h.run("buy", "300min", "--yes")).toBe(1);
+      expect(h.stderr()).toBe(
+        `${NO_REFUND_NOTICE}\nError: The SDK failed unexpectedly after the request was sent (TypeError: boom).\n` +
+          "Hint: The purchase may have been sent. Retry with --key k-after: the same key never charges twice.\n" +
+          "Idempotency key: k-after\n",
+      );
+    });
   });
 
   it("prints the plain-text retry instruction without --json", async () => {

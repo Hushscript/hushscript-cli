@@ -31,8 +31,11 @@ stdin.
 - If the config folder is a symbolic link, `login` refuses with exit code 1 instead of changing the
   mode of whatever the link points at. Replace the link with a real folder, or point
   `XDG_CONFIG_HOME` at one.
-- `--token ""` is a usage error (exit code 2) in every command, `logout` included; it does not fall
-  back to the other sources, and `logout` leaves the stored token alone.
+- A source that is empty or only whitespace counts as not set: `--token ""`, an empty
+  `HUSHSCRIPT_TOKEN`, an empty `token` in the stored file, and likewise `HUSHSCRIPT_BASE_URL`,
+  `XDG_CONFIG_HOME` and `APPDATA`. The CLI moves on to the next source; with none left it reports
+  "No Hushscript token." (exit code 1). `login --token ""` prompts as if the flag was absent, and
+  `logout` ignores `--token`.
 
 ## Commands
 
@@ -66,12 +69,16 @@ Without a terminal (stdin and stderr both) and without `--yes` it exits with cod
 hushscript buy 300min --yes
 ```
 
+A stop signal (SIGINT, SIGTERM or SIGHUP) while `buy` waits for your answer prints nothing and exits
+with 130: the no-refund notice and the question are already on stderr, nothing was sent and nothing
+was charged.
+
 Every purchase has an idempotency key: the one from `--key`, or a fresh one the CLI makes. If a
-purchase fails after it was sent, or the CLI is stopped by SIGINT, SIGTERM or SIGHUP once `buy` has
-started (exit code 130, also while the card is still being looked up), it prints the key and says
-"The purchase may have been sent. Retry with --key <key>: the same key never charges twice." Only a
-refusal that proves nothing was charged (a 400, 402, 404 or 422 answer, or a 403 with numeric code
-4021 or 4023) leaves the notice out; a 401 or 429 does not prove it, because the
+purchase fails after it was sent, or the CLI is stopped by SIGINT, SIGTERM or SIGHUP once the
+purchase is confirmed (or with `--yes`; exit code 130, also while the card is still being looked up),
+it prints the key and says "The purchase may have been sent. Retry with --key <key>: the same key never
+charges twice." A failure before any request was sent leaves the notice out, and so does a refusal that
+proves nothing was charged (a 400, 402, 404 or 422 answer, or a 403 with numeric code 4021 or 4023); a 401 or 429 does not prove it, because the
 server answers those before it replays a purchase that already went through. Retry with the same key and
 it cannot be charged twice:
 
@@ -108,6 +115,10 @@ the job has finished meanwhile it just fetches the transcript.
 
 `--json` prints one JSON document on stdout and nothing else. `--help --json` prints `{"help": "..."}`
 and `--version --json` prints `{"version": "..."}`.
+
+Error and notice text on stderr is scrubbed of every token the CLI knows, as given and trimmed, whatever
+its length or shape. Results on stdout are not scrubbed: they are your output, and a result that holds a
+token (a newly issued one, for example) prints it.
 
 Under `--json` stderr is JSON Lines: every line is one JSON object with a `type`. Notices and warnings
 come first, as they happen, and the error object, if the command failed, comes last:

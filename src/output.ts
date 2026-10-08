@@ -14,14 +14,14 @@ export interface ErrorReport {
   resumeToken?: string;
 }
 
-const MIN_SECRET_LENGTH = 8;
 // A token looks like hsr1:eu:pat.<hex>.<hex>; this catches one that was never registered as a secret.
 const TOKEN_SHAPE = /\bhsr\w*:[\w:.-]+/g;
 
+/** Every registered secret is replaced, whatever its length; a blank one would match between every character, so it is skipped. */
 export function scrub(text: string, secrets: readonly string[]): string {
   let out = text;
   for (const secret of secrets) {
-    if (secret.length >= MIN_SECRET_LENGTH) out = out.replaceAll(secret, "[redacted]");
+    if (secret.trim() !== "") out = out.replaceAll(secret, "[redacted]");
   }
   return out.replace(TOKEN_SHAPE, "[redacted]");
 }

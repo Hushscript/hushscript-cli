@@ -93,6 +93,8 @@ export interface Options {
   answer?: boolean;
   home: string;
   platform?: NodeJS.Platform;
+  /** Stands in for the fake API, to run a command against the real SDK client. */
+  client?: (options: ClientOptions) => Api;
 }
 
 export interface Harness {
@@ -148,7 +150,7 @@ export function harness(options: Options): Harness {
     homedir: options.home,
     createClient: (clientOptions) => {
       created.push(clientOptions);
-      return api;
+      return options.client === undefined ? api : options.client(clientOptions);
     },
   };
   return {

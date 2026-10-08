@@ -11,7 +11,7 @@ import type {
 } from "@hushscript/sdk";
 import { CliError } from "./errors.ts";
 import type { Output } from "./output.ts";
-import { configPath, readStoredToken, resolveToken, type Environment } from "./store.ts";
+import { configPath, readStoredToken, resolveToken, valueOf, type Environment } from "./store.ts";
 
 /** The part of the SDK client the commands use; `Hushscript` satisfies it. */
 export interface Api {
@@ -70,6 +70,14 @@ export interface Runtime {
   globals(): Globals;
 }
 
+/** Hides a token from error output as given and trimmed, because the SDK sends it trimmed. A blank one is not a token. */
+export function registerSecret(secrets: string[], token: string): void {
+  if (token.trim() === "") return;
+  for (const form of [token, token.trim()]) {
+    if (!secrets.includes(form)) secrets.push(form);
+  }
+}
+
 export function storePath(deps: Deps): string {
   return configPath(deps);
 }
@@ -95,5 +103,7 @@ export async function openClient(rt: Runtime): Promise<Api> {
       hint: "Run `hushscript login`, set HUSHSCRIPT_TOKEN, or pass --token. Create a token in the Hushscript app under Account, Connected apps.",
     });
   }
-  return deps.createClient({ token, baseUrl: deps.env["HUSHSCRIPT_BASE_URL"] });
+  // The flag and the environment token are in `secrets` already; the stored one is added once it is read.
+  registerSecret(rt.secrets, token);
+  return deps.createClient({ token, baseUrl: valueOf(deps.env["HUSHSCRIPT_BASE_URL"]) });
 }
