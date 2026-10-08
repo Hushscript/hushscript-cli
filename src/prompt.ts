@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
-import { interrupted } from "./errors.ts";
+import { CliError, interrupted } from "./errors.ts";
 
 export interface TerminalInput extends Readable {
   isTTY?: boolean;
@@ -40,10 +40,34 @@ export async function readSecret(
     let typed = "";
     const finish = (settle: () => void): void => {
       input.off("data", onData);
-      setRawMode(false);
+      input.off("end", onEnd);
+      input.off("close", onEnd);
+      input.off("error", onError);
+      try {
+        setRawMode(false);
+      } catch {
+        // A destroyed terminal has no mode left to restore.
+      }
       input.pause();
       output.write("\n");
       settle();
+    };
+    // The input ending or closing under the prompt is an EOF, like Ctrl-D.
+    const onEnd = (): void => {
+      finish(() => {
+        resolve(typed);
+      });
+    };
+    const onError = (error: Error): void => {
+      finish(() => {
+        reject(
+          new CliError({
+            code: "input_failed",
+            message: `Reading from the terminal failed (${error.message}).`,
+            exitCode: 1,
+          }),
+        );
+      });
     };
     const onData = (chunk: string | Buffer): void => {
       for (const char of String(chunk)) {
@@ -64,15 +88,20 @@ export async function readSecret(
       }
     };
     input.on("data", onData);
+    input.once("end", onEnd);
+    input.once("close", onEnd);
+    input.once("error", onError);
   });
 }
 
 /**
- * A yes/no question. EOF, a closed input and anything but y or yes answer no. The terminal stays in
- * cooked mode, so Ctrl-C reaches the process as SIGINT and ends it with the interrupt status. No listener
- * stays on `input` afterwards: readline removes its own when it closes, so that handler is left alone.
+ * A yes/no question. EOF, a closed, failed, ended or destroyed input and anything but y or yes answer
+ * no. The terminal stays in cooked mode, so Ctrl-C reaches the process as SIGINT and ends it with the
+ * interrupt status. No listener stays on `input` afterwards: readline removes its own when it closes,
+ * so those handlers are left alone.
  */
 export async function confirm(input: Readable, output: Writable, prompt: string): Promise<boolean> {
+  if (input.destroyed || input.readableEnded) return false;
   const lines = createInterface({ input, output, terminal: false });
   return await new Promise<boolean>((resolve) => {
     let answer = false;
@@ -86,6 +115,8 @@ export async function confirm(input: Readable, output: Writable, prompt: string)
     });
     // A destroyed input emits close but no end, which readline does not notice.
     input.once("close", onInputClose);
+    // readline hands an input error to its interface, where nothing else would take it: uncaught, and no close.
+    lines.once("error", onInputClose);
     output.write(prompt);
     lines.once("line", (line) => {
       answer = /^\s*y(?:es)?\s*$/i.test(line);

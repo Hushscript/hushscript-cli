@@ -180,4 +180,91 @@ describe("listeners left on the input", () => {
     expect(await answer).toBe(false);
     expect(listenerCounts(input)).toEqual(before);
   });
+
+  it("confirm answers no and leaves none when the input fails", async () => {
+    const input = new PassThrough();
+    const before = listenerCounts(input);
+    const answer = confirm(input, sink().stream, "Sure? ");
+    input.destroy(new Error("boom"));
+    expect(await answer).toBe(false);
+    expect(listenerCounts(input)).toEqual(before);
+  });
+
+  it.each([
+    ["ends", (input: PassThrough & TerminalInput) => input.end()],
+    ["is destroyed", (input: PassThrough & TerminalInput) => input.destroy()],
+  ])(
+    "readSecret on a terminal settles as EOF and leaves none when the input %s",
+    async (_name, stop) => {
+      const { input, modes } = terminal();
+      const before = listenerCounts(input);
+      const output = sink();
+      const answer = readSecret(input, output.stream, "Token: ");
+      input.write("ab");
+      await new Promise((resolve) => setImmediate(resolve));
+      stop(input);
+      expect(await answer).toBe("ab");
+      expect(modes).toEqual([true, false]);
+      expect(output.text()).toBe("Token: \n");
+      expect(listenerCounts(input)).toEqual(before);
+    },
+  );
+
+  it("readSecret on a terminal rejects with a CliError and leaves none when the input fails", async () => {
+    const { input, modes } = terminal();
+    const before = listenerCounts(input);
+    const answer = readSecret(input, sink().stream, "Token: ");
+    input.destroy(new Error("boom"));
+    const error: unknown = await answer.catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(CliError);
+    expect(error).toMatchObject({
+      code: "input_failed",
+      message: "Reading from the terminal failed (boom).",
+      exitCode: 1,
+    });
+    expect(modes).toEqual([true, false]);
+    expect(listenerCounts(input)).toEqual(before);
+  });
+
+  it("readSecret still settles when the terminal can no longer leave raw mode", async () => {
+    const input: PassThrough & TerminalInput = Object.assign(new PassThrough(), {
+      isTTY: true,
+      setRawMode: (mode: boolean): boolean => {
+        if (!mode) throw new TypeError("handle is closed");
+        return mode;
+      },
+    });
+    const answer = readSecret(input, sink().stream, "Token: ");
+    input.write("ab");
+    await new Promise((resolve) => setImmediate(resolve));
+    input.destroy();
+    expect(await answer).toBe("ab");
+  });
+});
+
+describe("confirm on an input that is already over", () => {
+  it("answers no at once, without a prompt, on a destroyed input", async () => {
+    const input = new PassThrough();
+    input.destroy();
+    const output = sink();
+    expect(await confirm(input, output.stream, "Sure? ")).toBe(false);
+    expect(output.text()).toBe("");
+  });
+
+  it("answers no at once, without a prompt, on an input that ended", async () => {
+    const input = new PassThrough();
+    input.resume();
+    input.end();
+    await new Promise((resolve) => input.once("end", resolve));
+    const output = sink();
+    expect(await confirm(input, output.stream, "Sure? ")).toBe(false);
+    expect(output.text()).toBe("");
+  });
+
+  it("answers no at once on an input that failed", async () => {
+    const input = new PassThrough();
+    input.on("error", () => undefined);
+    input.destroy(new Error("boom"));
+    expect(await confirm(input, sink().stream, "Sure? ")).toBe(false);
+  });
 });
