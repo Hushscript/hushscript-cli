@@ -74,11 +74,11 @@ with 130: the no-refund notice and the question are already on stderr, nothing w
 was charged.
 
 Every purchase has an idempotency key: the one from `--key`, or a fresh one the CLI makes. If a
-purchase fails after it was sent, or the CLI is stopped by SIGINT, SIGTERM or SIGHUP once `buy` has
-started (exit code 130, also while the card is still being looked up), it prints the key and says
-"The purchase may have been sent. Retry with --key <key>: the same key never charges twice." Only a
-refusal that proves nothing was charged (a 400, 402, 404 or 422 answer, or a 403 with numeric code
-4021 or 4023) leaves the notice out; a 401 or 429 does not prove it, because the
+purchase fails after it was sent, or the CLI is stopped by SIGINT, SIGTERM or SIGHUP once the
+purchase is confirmed (or with `--yes`; exit code 130, also while the card is still being looked up),
+it prints the key and says "The purchase may have been sent. Retry with --key <key>: the same key never
+charges twice." A failure before any request was sent leaves the notice out, and so does a refusal that
+proves nothing was charged (a 400, 402, 404 or 422 answer, or a 403 with numeric code 4021 or 4023); a 401 or 429 does not prove it, because the
 server answers those before it replays a purchase that already went through. Retry with the same key and
 it cannot be charged twice:
 
@@ -115,6 +115,10 @@ the job has finished meanwhile it just fetches the transcript.
 
 `--json` prints one JSON document on stdout and nothing else. `--help --json` prints `{"help": "..."}`
 and `--version --json` prints `{"version": "..."}`.
+
+Error and notice text on stderr is scrubbed of every token the CLI knows, as given and trimmed, whatever
+its length or shape. Results on stdout are not scrubbed: they are your output, and a result that holds a
+token (a newly issued one, for example) prints it.
 
 Under `--json` stderr is JSON Lines: every line is one JSON object with a `type`. Notices and warnings
 come first, as they happen, and the error object, if the command failed, comes last:
