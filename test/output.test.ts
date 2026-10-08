@@ -21,6 +21,45 @@ function cli(): Harness {
   return harness({ home, env: { HUSHSCRIPT_TOKEN: TEST_TOKEN } });
 }
 
+function summary(id: string) {
+  return {
+    id,
+    title: id,
+    language: null,
+    durationSeconds: 1,
+    createdAt: new Date(0),
+    autoDeleteAt: null,
+    tags: [],
+  };
+}
+
+function job() {
+  return {
+    id: "jb_2",
+    state: "done",
+    transcriptId: "tr_2",
+    error: null,
+    failureKind: null,
+    mode: "standard",
+    declaredSeconds: null,
+    verifiedSeconds: null,
+    actualSeconds: null,
+    billableSeconds: null,
+    retryOf: null,
+    createdAt: new Date(0),
+    options: {
+      languageCode: null,
+      speakerDetection: true,
+      medicalMode: false,
+      multichannel: false,
+      translationTargets: [],
+      keyterms: false,
+      prompt: false,
+      autoGenerateInsights: null,
+    },
+  };
+}
+
 describe("--json", () => {
   it("prints exactly one JSON document on stdout and nothing on stderr", async () => {
     const h = cli();
@@ -110,6 +149,57 @@ describe("--json", () => {
       transcripts: [{ ...summary, createdAt: "2025-10-09T08:53:20.000Z" }],
     });
   });
+  it("wraps nonempty jobs in a JSON object", async () => {
+    const h = cli();
+    h.api.jobs.list.mockReturnValue(rows([job()]));
+    expect(await h.run("jobs", "--json")).toBe(0);
+    expect(JSON.parse(h.stdout())).toEqual({
+      jobs: [{ ...job(), createdAt: "1970-01-01T00:00:00.000Z" }],
+    });
+    expect(h.stderr()).toBe("");
+  });
+
+  it("wraps nonempty packs in a JSON object", async () => {
+    const h = cli();
+    const pack = {
+      id: "300min",
+      seconds: 18000,
+      minutes: 300,
+      price: { amount: 1999, currency: "usd", formatted: "$19.99" },
+      bonusMinutes: 10,
+      available: true,
+    };
+    h.api.billing.packs.mockResolvedValue([pack]);
+    expect(await h.run("packs", "--json")).toBe(0);
+    expect(JSON.parse(h.stdout())).toEqual({ packs: [pack] });
+    expect(h.stderr()).toBe("");
+  });
+
+  it.each(["transcripts", "jobs"] as const)(
+    "prints no partial %s list when iteration fails",
+    async (command) => {
+      const h = cli();
+      const error = new ApiError({ code: "server_error", status: 500, message: "List failed." });
+      async function* failing<T>(row: T) {
+        await Promise.resolve();
+        yield row;
+        throw error;
+      }
+      if (command === "transcripts")
+        h.api.transcripts.list.mockReturnValue(failing(summary("tr_1")));
+      else h.api.jobs.list.mockReturnValue(failing(job()));
+      expect(await h.run(command, "--json")).toBe(1);
+      expect(h.stdout()).toBe("");
+      expect(JSON.parse(h.stderr())).toEqual({
+        type: "error",
+        code: "server_error",
+        numericCode: null,
+        status: 500,
+        message: "List failed.",
+        hint: null,
+      });
+    },
+  );
 });
 
 describe("human output", () => {
@@ -126,6 +216,19 @@ describe("human output", () => {
     expect(h.stdout()).toBe(
       "Balance: 61 min (3700 s)\nHeld for running jobs: 10 min\nExpires: 2027-01-15T08:00:00.000Z\n",
     );
+  });
+
+  it("omits held minutes and expiry when absent", async () => {
+    const h = cli();
+    expect(await h.run("balance")).toBe(0);
+    expect(h.stdout()).toBe("Balance: 300 min (18000 s)\n");
+  });
+
+  it("prints a finished job's transcript id without an error suffix", async () => {
+    const h = cli();
+    h.api.jobs.list.mockReturnValue(rows([job()]));
+    expect(await h.run("jobs")).toBe(0);
+    expect(h.stdout()).toBe("jb_2  done  1970-01-01T00:00:00.000Z  tr_2\n");
   });
 
   it("lists transcripts, jobs and packs one per line", async () => {
@@ -231,16 +334,52 @@ describe("human output", () => {
     expect(big.api.transcripts.list).toHaveBeenCalledWith({ pageSize: 100 });
   });
 
+  it("defaults to 20 transcripts and stops consuming at that limit", async () => {
+    const h = cli();
+    const expected = Array.from({ length: 20 }, (_, index) => summary(`tr_${String(index)}`));
+    async function* limitedRows() {
+      await Promise.resolve();
+      yield* expected;
+      throw new Error("The default list attempted to consume row 21.");
+    }
+    h.api.transcripts.list.mockReturnValue(limitedRows());
+    expect(await h.run("transcripts", "--json")).toBe(0);
+    expect(h.api.transcripts.list).toHaveBeenCalledWith({ pageSize: 20 });
+    expect(JSON.parse(h.stdout())).toEqual({
+      transcripts: expected.map((row) => ({ ...row, createdAt: "1970-01-01T00:00:00.000Z" })),
+    });
+  });
+
+  it.each([
+    [1, 1, 1],
+    [100, 100, 2],
+    [101, 100, 2],
+    [999999, 100, 2],
+  ])("accepts --limit %i and caps the requested page size", async (limit, pageSize, count) => {
+    const h = cli();
+    h.api.transcripts.list.mockReturnValue(rows([summary("tr_1"), summary("tr_2")]));
+    expect(await h.run("transcripts", "--limit", String(limit), "--json")).toBe(0);
+    expect(h.api.transcripts.list).toHaveBeenCalledWith({ pageSize });
+    expect((JSON.parse(h.stdout()) as { transcripts: unknown[] }).transcripts).toHaveLength(count);
+    expect(h.stderr()).toBe("");
+  });
+
   it("passes --active to the jobs list and defaults to all jobs", async () => {
     const h = cli();
     await h.run("jobs");
     expect(h.api.jobs.list).toHaveBeenCalledWith({ active: false });
   });
 
-  it("formats durations", () => {
-    expect(formatDuration(0)).toBe("0:00");
-    expect(formatDuration(59.6)).toBe("1:00");
-    expect(formatDuration(3_725)).toBe("1:02:05");
+  it.each([
+    [-5, "0:00"],
+    [0, "0:00"],
+    [59.4, "0:59"],
+    [59.6, "1:00"],
+    [3600, "1:00:00"],
+    [3725, "1:02:05"],
+    [360_000_005, "100000:00:05"],
+  ] as const)("formats duration %s as %s", (seconds, expected) => {
+    expect(formatDuration(seconds)).toBe(expected);
   });
 });
 

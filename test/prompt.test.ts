@@ -1,3 +1,4 @@
+import * as readline from "node:readline";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { CliError } from "../src/errors.ts";
@@ -28,6 +29,14 @@ describe("readSecret", () => {
     input.end("the-token\nsecond line\n");
     const output = sink();
     expect(await readSecret(input, output.stream, "Token: ")).toBe("the-token");
+    expect(output.text()).toBe("");
+  });
+
+  it("reads a CRLF token line without the carriage return", async () => {
+    const input = new PassThrough();
+    input.end("hsr-token\r\nsecond line\r\n");
+    const output = sink();
+    expect(await readSecret(input, output.stream, "Token: ")).toBe("hsr-token");
     expect(output.text()).toBe("");
   });
 
@@ -87,16 +96,35 @@ describe("confirm", () => {
     }
   });
 
-  it("writes the prompt", async () => {
-    expect((await ask("y\n")).output).toBe("Sure? ");
+  it("closes its readline interface once after the answer", async () => {
+    const input = new PassThrough();
+    const output = sink();
+    const closed = vi.fn();
+    const emit = Reflect.get(readline.Interface.prototype, "emit") as (
+      this: readline.Interface,
+      event: string | symbol,
+      ...args: unknown[]
+    ) => boolean;
+    const emitSpy = vi.spyOn(readline.Interface.prototype, "emit").mockImplementation(function (
+      this: readline.Interface,
+      event: string | symbol,
+      ...args: unknown[]
+    ) {
+      if (event === "close") closed();
+      return emit.call(this, event, ...args);
+    });
+    try {
+      const answer = confirm(input, output.stream, "Sure? ");
+      input.write("yes\n");
+      expect(await answer).toBe(true);
+      expect(closed).toHaveBeenCalledTimes(1);
+    } finally {
+      emitSpy.mockRestore();
+      input.destroy();
+    }
   });
 
-  it("does not wait for more input after the answer", async () => {
-    const input = new PassThrough();
-    const close = vi.fn();
-    input.on("close", close);
-    const answer = confirm(input, sink().stream, "Sure? ");
-    input.write("y\n");
-    expect(await answer).toBe(true);
+  it("writes the prompt", async () => {
+    expect((await ask("y\n")).output).toBe("Sure? ");
   });
 });

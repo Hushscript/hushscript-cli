@@ -2,11 +2,13 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ApiError, NetworkError } from "@hushscript/sdk";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import pkg from "../package.json" with { type: "json" };
-import { NO_REFUND_NOTICE } from "../src/commands/buy.ts";
 import { saveToken } from "../src/store.ts";
 import { harness, TEST_TOKEN, type Harness } from "./helpers.ts";
+
+const NO_REFUND_NOTICE =
+  "Minutes are added to your account instantly after payment. All purchases are final and non-refundable.";
 
 let home: string;
 let file: string;
@@ -120,7 +122,9 @@ describe("stderr under --json", () => {
     const h = cli();
     h.api.transcribe.mockImplementation(() => new Promise(() => undefined));
     void h.run("transcribe", file, "--json");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(h.api.transcribe).toHaveBeenCalledTimes(1);
+    });
     h.interrupt();
     h.interrupt();
     expect(h.forcedExits).toEqual([130]);

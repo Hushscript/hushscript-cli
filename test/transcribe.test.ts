@@ -2,7 +2,7 @@ import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/prom
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AbortError, ApiError, type TranscribeOptions } from "@hushscript/sdk";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { harness, transcript, TEST_TOKEN, type Harness } from "./helpers.ts";
 
 let home: string;
@@ -60,12 +60,18 @@ describe("transcribe", () => {
     expect(requestOf(h).idempotencyKey).toBe("replay_1-a");
   });
 
-  it("rejects a --key outside 1 to 128 of A-Za-z0-9_-, sending nothing", async () => {
-    const h = cli();
-    expect(await h.run("transcribe", file, "--key", "no spaces")).toBe(2);
-    expect(h.created).toEqual([]);
-    expect(h.api.transcribe).not.toHaveBeenCalled();
-  });
+  it.each(["a".repeat(129), "", "no spaces", "line\nbreak", "café"])(
+    "rejects invalid --key %j before creating a client",
+    async (key) => {
+      const h = cli();
+      expect(await h.run("transcribe", file, "--key", key)).toBe(2);
+      expect(h.stderr()).toBe(
+        "Error: --key must be 1 to 128 characters from A-Z, a-z, 0-9, _ and -.\n",
+      );
+      expect(h.created).toEqual([]);
+      expect(h.api.transcribe).not.toHaveBeenCalled();
+    },
+  );
 
   it("sends no language or translation unless asked", async () => {
     const h = cli();
@@ -118,9 +124,9 @@ describe("transcribe", () => {
     expect(JSON.parse(h.stdout())).toMatchObject({ id: "tr_test_0001" });
   });
 
-  it("names the transcript id when the output file cannot be written", async () => {
+  it("prints the complete recovery hint when the output folder disappears after transcription", async () => {
     const h = cli();
-    const out = join(home, "locked.txt");
+    const out = join(home, "missing-output.txt");
     await writeFile(out, "old");
     h.api.transcribe.mockImplementation(async () => {
       await rm(home, { recursive: true, force: true });
@@ -129,7 +135,9 @@ describe("transcribe", () => {
     expect(await h.run("transcribe", file, "--out", out, "--json")).toBe(1);
     const report = JSON.parse(h.stderr()) as { code: string; hint: string };
     expect(report.code).toBe("write_failed");
-    expect(report.hint).toContain("hushscript transcript tr_test_0001");
+    expect(report.hint).toBe(
+      "The transcript was created; fetch it again with `hushscript transcript tr_test_0001`.",
+    );
   });
 
   it("shows progress on stderr only on a terminal and not under --json", async () => {
@@ -149,13 +157,6 @@ describe("transcribe", () => {
     await json.run("transcribe", file, "--json");
     expect(requestOf(json).onProgress).toBeUndefined();
     expect(json.stderr()).toBe("");
-  });
-
-  it("passes SDK errors through with exit 1", async () => {
-    const h = cli();
-    h.api.transcribe.mockRejectedValue(new ApiError({ code: "unsupported_media", message: "No." }));
-    expect(await h.run("transcribe", file)).toBe(1);
-    expect(h.stderr()).toContain("Error: No.");
   });
 });
 
@@ -177,7 +178,9 @@ describe("Ctrl-C during transcribe", () => {
     const h = cli();
     hang(h, "rt-1", "rt-1");
     const result = h.run("transcribe", file);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(h.api.transcribe).toHaveBeenCalled();
+    });
     h.interrupt();
     expect(await result).toBe(130);
     expect(h.stderr()).toContain("Resume token: rt-1");
@@ -188,7 +191,9 @@ describe("Ctrl-C during transcribe", () => {
     const h = cli();
     hang(h, "rt-2", null);
     const result = h.run("transcribe", file, "--json");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(h.api.transcribe).toHaveBeenCalled();
+    });
     h.interrupt();
     expect(await result).toBe(130);
     expect(JSON.parse(h.stderr())).toMatchObject({
@@ -203,7 +208,9 @@ describe("Ctrl-C during transcribe", () => {
     const h = cli();
     hang(h, null, null);
     const result = h.run("transcribe", file);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(h.api.transcribe).toHaveBeenCalled();
+    });
     h.interrupt();
     expect(await result).toBe(130);
     expect(h.stderr()).toMatch(
@@ -215,7 +222,9 @@ describe("Ctrl-C during transcribe", () => {
     const h = cli();
     hang(h, null, null);
     const result = h.run("transcribe", file, "--key", "replay_2");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(h.api.transcribe).toHaveBeenCalled();
+    });
     h.interrupt();
     expect(await result).toBe(130);
     expect(h.stderr()).toBe(
@@ -227,7 +236,9 @@ describe("Ctrl-C during transcribe", () => {
     const noToken = cli();
     hang(noToken, null, null);
     const first = noToken.run("transcribe", file, "--key", "replay_3", "--json");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(noToken.api.transcribe).toHaveBeenCalled();
+    });
     noToken.interrupt();
     expect(await first).toBe(130);
     expect(JSON.parse(noToken.stderr())).toMatchObject({
@@ -237,7 +248,9 @@ describe("Ctrl-C during transcribe", () => {
     const withToken = cli();
     hang(withToken, "rt-8", "rt-8");
     const second = withToken.run("transcribe", file, "--key", "replay_3", "--json");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(withToken.api.transcribe).toHaveBeenCalled();
+    });
     withToken.interrupt();
     expect(await second).toBe(130);
     expect(JSON.parse(withToken.stderr())).toMatchObject({
@@ -250,7 +263,9 @@ describe("Ctrl-C during transcribe", () => {
     const h = cli();
     hang(h, "rt-1", "rt-1");
     const result = h.run("transcribe", file);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(h.api.transcribe).toHaveBeenCalled();
+    });
     h.interrupt();
     await result;
     expect(h.stderr()).toContain(`Hint: Continue with: hushscript resume rt-1 ${file}`);
@@ -274,7 +289,9 @@ describe("Ctrl-C during transcribe", () => {
       "--out",
       out,
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(h.api.transcribe).toHaveBeenCalled();
+    });
     h.interrupt();
     expect(await result).toBe(130);
     expect(h.stderr()).toContain(
@@ -286,7 +303,9 @@ describe("Ctrl-C during transcribe", () => {
     const h = cli();
     hang(h, null, null);
     const result = h.run("transcribe", file, "--key", "replay_5", "--format", "vtt");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(h.api.transcribe).toHaveBeenCalled();
+    });
     h.interrupt();
     expect(await result).toBe(130);
     expect(h.stderr()).toContain(
@@ -310,7 +329,9 @@ describe("Ctrl-C during transcribe", () => {
       "--out",
       out,
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(h.api.transcribe).toHaveBeenCalled();
+    });
     h.interrupt();
     expect(await result).toBe(130);
     expect(h.stderr()).toContain(
@@ -333,7 +354,9 @@ describe("Ctrl-C during transcribe", () => {
     const full = cli();
     hang2(full);
     const first = full.run("resume", "rt-7", file, "--format", "vtt", "--out", out);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(full.api.resume).toHaveBeenCalled();
+    });
     full.interrupt();
     expect(await first).toBe(130);
     expect(full.stderr()).toContain(
@@ -342,7 +365,9 @@ describe("Ctrl-C during transcribe", () => {
     const bare = cli();
     hang2(bare);
     const second = bare.run("resume", "rt-7", file);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(bare.api.resume).toHaveBeenCalled();
+    });
     bare.interrupt();
     expect(await second).toBe(130);
     expect(bare.stderr()).toContain(`Hint: Continue with: hushscript resume rt-7 ${file}\n`);
@@ -354,7 +379,9 @@ describe("Ctrl-C during transcribe", () => {
     const h = cli();
     hang(h, "rt-1", "rt-1");
     const result = h.run("transcribe", spaced);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(h.api.transcribe).toHaveBeenCalled();
+    });
     h.interrupt();
     await result;
     expect(h.stderr()).toContain(`hushscript resume rt-1 '${spaced}'`);
@@ -373,7 +400,9 @@ describe("Ctrl-C during transcribe", () => {
         }),
     );
     const result = h.run("transcribe", file, "--json");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(h.api.transcribe).toHaveBeenCalled();
+    });
     h.interrupt();
     expect(await result).toBe(130);
     expect(JSON.parse(h.stderr())).toMatchObject({ resumeToken: "rt-4", idempotencyKey: "key-4" });
@@ -383,7 +412,9 @@ describe("Ctrl-C during transcribe", () => {
     const h = cli();
     hang(h, "rt-6", null);
     const result = h.run("transcribe", file, "--json");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(h.api.transcribe).toHaveBeenCalled();
+    });
     h.interrupt();
     expect(await result).toBe(130);
     expect(JSON.parse(h.stderr())).toMatchObject({ idempotencyKey: requestOf(h).idempotencyKey });
@@ -393,7 +424,9 @@ describe("Ctrl-C during transcribe", () => {
     const h = cli();
     hang(h, "rt-7", "rt-7");
     const result = h.run("transcribe", file, "--json");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(h.api.transcribe).toHaveBeenCalled();
+    });
     h.interrupt();
     h.interrupt();
     expect(h.forcedExits).toEqual([130]);
@@ -410,7 +443,9 @@ describe("Ctrl-C during transcribe", () => {
     const h = cli();
     hang(h, "rt-3", "rt-3");
     const result = h.run("transcribe", file);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(h.api.transcribe).toHaveBeenCalled();
+    });
     h.interrupt();
     h.interrupt();
     // Synchronously after the signal: the exit must not wait for the call to wind down.
@@ -424,7 +459,9 @@ describe("Ctrl-C during transcribe", () => {
     const h = cli();
     hang(h, "rt-5", "rt-5");
     const result = h.run("transcribe", file, "--json");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(h.api.transcribe).toHaveBeenCalled();
+    });
     h.interrupt();
     h.interrupt();
     expect(h.forcedExits).toEqual([130]);
@@ -474,13 +511,6 @@ describe("resume", () => {
     expect(await cli().run("resume", "rt-9")).toBe(2);
   });
 
-  it("passes SDK errors through with exit 1", async () => {
-    const h = cli();
-    h.api.resume.mockRejectedValue(new ApiError({ code: "not_found", message: "Gone." }));
-    expect(await h.run("resume", "rt-9", file)).toBe(1);
-    expect(h.stderr()).toContain("Error: Gone.");
-  });
-
   it("prints the token it was given when interrupted again, before the SDK reports one", async () => {
     const h = cli();
     h.api.resume.mockImplementation(
@@ -492,7 +522,9 @@ describe("resume", () => {
         }),
     );
     const result = h.run("resume", "rt-9", file);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(h.api.resume).toHaveBeenCalled();
+    });
     h.interrupt();
     expect(await result).toBe(130);
     expect(h.stderr()).toContain("Resume token: rt-9");
@@ -507,5 +539,146 @@ describe("resume", () => {
     });
     await h.run("resume", "rt-9", file);
     expect(h.stderr()).toContain("Processing (queued)");
+  });
+});
+
+describe("job failures and boundaries", () => {
+  it.each(["a", "a".repeat(128)])("accepts the --key boundary %j unchanged", async (key) => {
+    const h = cli();
+    expect(await h.run("transcribe", file, "--key", key)).toBe(0);
+    expect(requestOf(h).idempotencyKey).toBe(key);
+  });
+
+  it.each([
+    ["transcribe", false],
+    ["transcribe", true],
+    ["resume", false],
+    ["resume", true],
+  ] as const)("preserves both SDK error fields for %s (json=%s)", async (command, json) => {
+    const h = cli();
+    const error = new ApiError({
+      code: "server_error",
+      status: 503,
+      message: "Try later.",
+    });
+    error.resumeToken = "rt-failure";
+    error.idempotencyKey = "key-failure";
+    h.api[command].mockRejectedValue(error);
+    const args = command === "resume" ? [command, "rt-input", file] : [command, file];
+    expect(await h.run(...args, ...(json ? ["--json"] : []))).toBe(1);
+    expect(h.stdout()).toBe("");
+    if (json) {
+      expect(JSON.parse(h.stderr())).toEqual({
+        type: "error",
+        code: "server_error",
+        numericCode: null,
+        status: 503,
+        message: "Try later.",
+        hint: null,
+        resumeToken: "rt-failure",
+        idempotencyKey: "key-failure",
+      });
+    } else {
+      expect(h.stderr()).toBe(
+        "Error: Try later.\nIdempotency key: key-failure\nResume token: rt-failure\n",
+      );
+    }
+  });
+
+  it.each(["transcribe", "resume"] as const)(
+    "closes the %s interrupt window after failure",
+    async (command) => {
+      const h = cli();
+      h.api[command].mockRejectedValue(new ApiError({ code: "server_error", message: "No." }));
+      const args = command === "resume" ? [command, "rt-input", file] : [command, file];
+      expect(await h.run(...args)).toBe(1);
+      const before = h.stderr();
+      h.interrupt();
+      h.interrupt();
+      expect(h.stderr()).toBe(before);
+      expect(h.forcedExits).toEqual([]);
+    },
+  );
+
+  it("suppresses the translation note under --json", async () => {
+    const h = cli();
+    expect(await h.run("transcribe", file, "--translate", "es", "--json")).toBe(0);
+    expect(requestOf(h).translateTo).toEqual(["es"]);
+    expect(JSON.parse(h.stdout())).toMatchObject({ id: "tr_test_0001" });
+    expect(h.stderr()).toBe("");
+  });
+
+  it.each(["transcribe", "resume"] as const)(
+    "forces a second signal during %s before a new token arrives",
+    async (command) => {
+      const h = cli();
+      h.api.transcribe.mockImplementation(
+        (_file, options) =>
+          new Promise((_resolve, reject) => {
+            options?.signal?.addEventListener("abort", () => {
+              reject(new AbortError({ message: "Aborted." }));
+            });
+          }),
+      );
+      h.api.resume.mockImplementation(
+        (_token, _file, options) =>
+          new Promise((_resolve, reject) => {
+            options?.signal?.addEventListener("abort", () => {
+              reject(new AbortError({ message: "Aborted." }));
+            });
+          }),
+      );
+      const args =
+        command === "resume" ? [command, "rt-input", file] : [command, file, "--key", "key-input"];
+      const result = h.run(...args, "--json");
+      await vi.waitFor(() => {
+        expect(h.api[command]).toHaveBeenCalled();
+      });
+      h.interrupt();
+      h.interrupt();
+      expect(h.forcedExits).toEqual([130]);
+      const report = JSON.parse(h.stderr().split("\n")[0] ?? "") as Record<string, unknown>;
+      expect(report).toMatchObject({
+        code: "interrupted",
+        hint:
+          command === "resume"
+            ? `Continue with: hushscript resume rt-input ${file}`
+            : `Retry with: hushscript transcribe --key key-input ${file}`,
+      });
+      if (command === "resume") {
+        expect(report["resumeToken"]).toBe("rt-input");
+        expect(report).not.toHaveProperty("idempotencyKey");
+      } else {
+        expect(report["idempotencyKey"]).toBe("key-input");
+        expect(report).not.toHaveProperty("resumeToken");
+      }
+      expect(h.stdout()).toBe("");
+      await result;
+    },
+  );
+
+  it("clears a drawn progress line before the second-signal report", async () => {
+    const h = cli({ stderrIsTTY: true });
+    h.api.transcribe.mockImplementation(
+      (_file, options) =>
+        new Promise((_resolve, reject) => {
+          options?.onResumeToken?.("rt-progress");
+          options?.onProgress?.({ stage: "processing", state: "queued" });
+          options?.signal?.addEventListener("abort", () => {
+            reject(new AbortError({ message: "Aborted." }));
+          });
+        }),
+    );
+    const result = h.run("transcribe", file, "--key", "key-progress");
+    await vi.waitFor(() => {
+      expect(h.api.transcribe).toHaveBeenCalled();
+    });
+    h.interrupt();
+    h.interrupt();
+    expect(h.forcedExits).toEqual([130]);
+    expect(h.stderr()).toBe(
+      `\r\u001b[KProcessing (queued)\r\u001b[KError: Interrupted.\nHint: Continue with: hushscript resume rt-progress ${file}\nIdempotency key: key-progress\nResume token: rt-progress\n`,
+    );
+    await result;
   });
 });

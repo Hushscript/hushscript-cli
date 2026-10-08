@@ -2,9 +2,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ApiError, NetworkError, PaymentMethodRequiredError } from "@hushscript/sdk";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { NO_REFUND_NOTICE } from "../src/commands/buy.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { run } from "../src/program.ts";
+import { installInterrupts } from "../src/signals.ts";
+import * as store from "../src/store.ts";
 import { harness, TEST_TOKEN, type Harness } from "./helpers.ts";
+
+const NO_REFUND_NOTICE =
+  "Minutes are added to your account instantly after payment. All purchases are final and non-refundable.";
 
 let home: string;
 
@@ -78,11 +83,194 @@ describe("buy without --yes", () => {
     expect(JSON.parse(h.stderr())).toMatchObject({ code: "usage_error" });
   });
 
-  it("rejects a key that is not 1 to 128 of A-Za-z0-9_-", async () => {
-    const h = cli({ stdinIsTTY: true, stderrIsTTY: true, answer: true });
-    expect(await h.run("buy", "300min", "--key", "no spaces")).toBe(2);
-    expect(h.api.buy).not.toHaveBeenCalled();
+  it.each(["", "no spaces", "a\nb", "clé", "k".repeat(129)])(
+    "rejects invalid key %j before creating a client",
+    async (key) => {
+      const h = cli({ stdinIsTTY: true, stderrIsTTY: true, answer: true });
+      expect(await h.run("buy", "300min", "--key", key, "--json")).toBe(2);
+      expect(errorDocument(h)).toMatchObject({
+        code: "usage_error",
+        message: "--key must be 1 to 128 characters from A-Z, a-z, 0-9, _ and -.",
+      });
+      expect(h.created).toEqual([]);
+      expect(h.prompts).toEqual([]);
+      expect(h.api.buy).not.toHaveBeenCalled();
+      expect(h.stdout()).toBe("");
+    },
+  );
+
+  it.each(["k", "k".repeat(128)])("accepts key boundary %j", async (key) => {
+    const h = cli();
+    expect(await h.run("buy", "300min", "--yes", "--key", key)).toBe(0);
+    expect(h.api.buy).toHaveBeenCalledWith("300min", {
+      acknowledgeNoRefund: true,
+      idempotencyKey: key,
+    });
   });
+
+  it("refuses piped stdin even when stderr is a terminal", async () => {
+    const h = cli({ stdinIsTTY: false, stderrIsTTY: true, answer: true });
+    expect(await h.run("buy", "300min")).toBe(2);
+    expect(h.stderr()).toContain("Nothing was sent.");
+    expect(h.created).toEqual([]);
+    expect(h.prompts).toEqual([]);
+    expect(h.api.buy).not.toHaveBeenCalled();
+    expect(h.stdout()).toBe("");
+  });
+
+  it("reports a declined JSON purchase after its notice without buying", async () => {
+    const h = cli({ stdinIsTTY: true, stderrIsTTY: true, answer: false });
+    expect(await h.run("buy", "300min", "--json")).toBe(1);
+    const reports = h
+      .stderr()
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as unknown);
+    expect(reports).toEqual([
+      { type: "notice", code: "no_refund", message: NO_REFUND_NOTICE },
+      expect.objectContaining({
+        type: "error",
+        code: "cancelled",
+        message: "Cancelled. Nothing was charged.",
+      }),
+    ]);
+    expect(h.api.buy).not.toHaveBeenCalled();
+    expect(h.stdout()).toBe("");
+  });
+
+  it.each(["", " 300min", "300MIN", "-300min", "0x5min", "1000000min", "1234567min", "３００min"])(
+    "rejects invalid pack %j before creating a client",
+    async (pack) => {
+      const h = cli();
+      expect(await h.run("buy", "--yes", "--json", "--", pack)).toBe(2);
+      expect(errorDocument(h)).toMatchObject({
+        code: "usage_error",
+        message: "The pack must look like 300min; run `hushscript packs` to list them.",
+      });
+      expect(h.created).toEqual([]);
+      expect(h.api.buy).not.toHaveBeenCalled();
+      expect(h.stdout()).toBe("");
+    },
+  );
+
+  it.each(["1min", "999999min"])("accepts pack boundary %j", async (pack) => {
+    const h = cli();
+    expect(await h.run("buy", pack, "--yes", "--key", "pack-boundary")).toBe(0);
+    expect(h.api.buy).toHaveBeenCalledWith(pack, {
+      acknowledgeNoRefund: true,
+      idempotencyKey: "pack-boundary",
+    });
+  });
+
+  it.each(["SIGINT", "SIGTERM", "SIGHUP"] as const)(
+    "exits silently on %s while reading the token before buying",
+    async (signal) => {
+      const h = cli();
+      const listeners = new Map<NodeJS.Signals, () => void>();
+      const exit = vi.fn();
+      const stdout = vi.fn();
+      const stderr = vi.fn();
+      const confirm = vi.fn(() => Promise.resolve(true));
+      const createClient = vi.fn(() => h.api);
+      const interrupts = installInterrupts({
+        listen: (name, listener) => listeners.set(name, listener),
+        flushStderr: (done) => {
+          done();
+        },
+        exit,
+      });
+      const token = vi
+        .spyOn(store, "resolveToken")
+        .mockImplementation(() => new Promise(() => undefined));
+      try {
+        void run(["buy", "300min"], {
+          homedir: home,
+          platform: "linux",
+          env: {},
+          createClient,
+          io: {
+            stdout,
+            stderr,
+            stdinIsTTY: true,
+            stdoutIsTTY: false,
+            stderrIsTTY: true,
+            readSecret: () => Promise.resolve(""),
+            confirm,
+            onInterrupt: interrupts.onInterrupt,
+            forceExit: interrupts.forceExit,
+          },
+        });
+        await vi.waitFor(() => {
+          expect(token).toHaveBeenCalledTimes(1);
+        });
+        const received = listeners.get(signal);
+        expect(received).toBeTypeOf("function");
+        received?.();
+        expect(exit).toHaveBeenCalledExactlyOnceWith(130);
+        expect(stdout).not.toHaveBeenCalled();
+        expect(stderr).not.toHaveBeenCalled();
+        expect(confirm).not.toHaveBeenCalled();
+        expect(createClient).not.toHaveBeenCalled();
+        expect(h.api.buy).not.toHaveBeenCalled();
+      } finally {
+        token.mockRestore();
+      }
+    },
+  );
+
+  it.each(["SIGINT", "SIGTERM", "SIGHUP"] as const)(
+    "exits silently on %s during the confirm prompt before buying",
+    async (signal) => {
+      const h = cli();
+      const listeners = new Map<NodeJS.Signals, () => void>();
+      const exit = vi.fn();
+      const stdout = vi.fn();
+      const stderr = vi.fn();
+      const confirm = vi.fn((prompt: string) => {
+        stderr(prompt);
+        return new Promise<boolean>(() => undefined);
+      });
+      const interrupts = installInterrupts({
+        listen: (name, listener) => listeners.set(name, listener),
+        flushStderr: (done) => {
+          done();
+        },
+        exit,
+      });
+      void run(["buy", "300min"], {
+        homedir: home,
+        platform: "linux",
+        env: { HUSHSCRIPT_TOKEN: TEST_TOKEN },
+        createClient: () => h.api,
+        io: {
+          stdout,
+          stderr,
+          stdinIsTTY: true,
+          stdoutIsTTY: false,
+          stderrIsTTY: true,
+          readSecret: () => Promise.resolve(""),
+          confirm,
+          onInterrupt: interrupts.onInterrupt,
+          forceExit: interrupts.forceExit,
+        },
+      });
+      await vi.waitFor(() => {
+        expect(confirm).toHaveBeenCalledExactlyOnceWith(
+          "Buy 300min with your saved default card? [y/N] ",
+        );
+      });
+      const received = listeners.get(signal);
+      expect(received).toBeTypeOf("function");
+      received?.();
+      expect(exit).toHaveBeenCalledExactlyOnceWith(130);
+      expect(h.api.buy).not.toHaveBeenCalled();
+      expect(stdout).not.toHaveBeenCalled();
+      expect(stderr.mock.calls).toEqual([
+        [`${NO_REFUND_NOTICE}\n`],
+        ["Buy 300min with your saved default card? [y/N] "],
+      ]);
+    },
+  );
 
   it("keeps stdout clean under --json while it asks", async () => {
     const h = cli({ stdinIsTTY: true, stderrIsTTY: true, answer: true });
@@ -153,6 +341,14 @@ describe("a purchase that fails", () => {
     return h;
   }
 
+  it("reports a non-SDK purchase error without retry advice", async () => {
+    const h = cli();
+    h.api.buy.mockRejectedValue(new TypeError("boom"));
+    expect(await h.run("buy", "300min", "--yes", "--key", "unexpected-error")).toBe(1);
+    expect(h.stderr()).toBe(`${NO_REFUND_NOTICE}\nError: Unexpected error: boom\n`);
+    expect(h.stderr()).not.toContain("Retry with --key");
+  });
+
   it("prints the key and the retry instruction when the outcome is unknown", async () => {
     const h = await failWith(new NetworkError({ message: "The connection dropped." }), "k-1");
     expect(errorDocument(h)).toMatchObject({
@@ -173,38 +369,71 @@ describe("a purchase that fails", () => {
     });
   });
 
-  it("says nothing about a charge for statuses that never charge", async () => {
-    for (const status of [400, 402, 403, 404, 422]) {
-      const h = await failWith(new ApiError({ code: "refused", status, message: "No." }), "k-3");
-      const report = errorDocument(h) as { hint: string | null; idempotencyKey: string };
-      expect(report.hint).toBeNull();
-      expect(report.idempotencyKey).toBe("k-3");
-    }
-  });
-
-  it("says the purchase may have been sent after a 401 or 429, which the server answers before its replay", async () => {
-    for (const status of [401, 429]) {
-      const h = await failWith(new ApiError({ code: "refused", status, message: "No." }), "k-5");
+  it.each([
+    [400, null],
+    [402, null],
+    [404, null],
+    [422, null],
+    [403, 4021],
+    [403, 4023],
+  ])(
+    "omits the charge notice for refusal status %i numericCode %s",
+    async (status, numericCode) => {
+      const h = await failWith(
+        new ApiError({ code: "refused", status, numericCode, message: "No." }),
+        "k-3",
+      );
       expect(errorDocument(h)).toMatchObject({
         status,
+        numericCode,
+        hint: null,
+        idempotencyKey: "k-3",
+      });
+    },
+  );
+
+  it.each([
+    [403, null],
+    [403, 4022],
+    [403, 4024],
+    [403, 4030],
+    [401, 4021],
+    [429, 4023],
+    [500, 4021],
+    [200, 4023],
+    [401, null],
+    [429, null],
+    [408, null],
+    [409, null],
+    [410, null],
+    [413, null],
+    [500, null],
+    [503, null],
+    [504, null],
+    [200, null],
+  ])(
+    "adds the charge notice for uncertain status %i numericCode %s",
+    async (status, numericCode) => {
+      const code = status === 200 ? "bad_response" : "refused";
+      const h = await failWith(
+        new ApiError({ code, status, numericCode, message: "No usable purchase." }),
+        "k-5",
+      );
+      expect(errorDocument(h)).toMatchObject({
+        code,
+        status,
+        numericCode,
         idempotencyKey: "k-5",
         hint: "The purchase may have been sent. Retry with --key k-5: the same key never charges twice.",
       });
-    }
-  });
+    },
+  );
 
   it("says nothing about a charge when the failure came before the send", async () => {
     const h = await failWith(new PaymentMethodRequiredError({ message: "No saved card." }), null);
     const report = errorDocument(h);
     expect(report["idempotencyKey"]).toBeUndefined();
     expect(String(report["hint"])).not.toContain("--key");
-  });
-
-  it("passes other errors through unchanged", async () => {
-    const h = cli();
-    h.api.buy.mockRejectedValue(new TypeError("boom"));
-    expect(await h.run("buy", "300min", "--yes")).toBe(1);
-    expect(h.stderr()).toContain("Unexpected error: boom");
   });
 
   it("prints the key and the retry instruction when a signal arrives mid-purchase", async () => {
@@ -219,7 +448,9 @@ describe("a purchase that fails", () => {
         }),
     );
     const result = h.run("buy", "300min", "--yes", "--key", "k-sig");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(h.api.buy).toHaveBeenCalledTimes(1);
+    });
     h.interrupt();
     expect(h.forcedExits).toEqual([130]);
     expect(h.stderr()).toContain("Idempotency key: k-sig");
@@ -234,7 +465,9 @@ describe("a purchase that fails", () => {
     const h = cli();
     h.api.buy.mockImplementation(() => new Promise(() => undefined));
     void h.run("buy", "300min", "--yes", "--json");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(h.api.buy).toHaveBeenCalledTimes(1);
+    });
     h.interrupt();
     expect(h.forcedExits).toEqual([130]);
     expect(errorDocument(h)).toMatchObject({
@@ -248,7 +481,9 @@ describe("a purchase that fails", () => {
     const h = cli();
     h.api.buy.mockImplementation(() => new Promise(() => undefined));
     void h.run("buy", "300min", "--yes", "--key", "k-lines", "--json");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.waitFor(() => {
+      expect(h.api.buy).toHaveBeenCalledTimes(1);
+    });
     h.interrupt();
     const lines = h
       .stderr()
@@ -268,6 +503,16 @@ describe("a purchase that fails", () => {
     await h.run("buy", "300min", "--yes");
     h.interrupt();
     expect(h.forcedExits).toEqual([]);
+  });
+
+  it("stops listening for signals after a failed purchase", async () => {
+    const h = cli();
+    h.api.buy.mockRejectedValue(new NetworkError({ message: "Dropped." }));
+    expect(await h.run("buy", "300min", "--yes", "--json")).toBe(1);
+    const stderr = h.stderr();
+    h.interrupt();
+    expect(h.forcedExits).toEqual([]);
+    expect(h.stderr()).toBe(stderr);
   });
 
   it("prints the plain-text retry instruction without --json", async () => {

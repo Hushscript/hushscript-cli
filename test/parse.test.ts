@@ -23,32 +23,40 @@ function cli(): Harness {
 }
 
 /** An invocation that must fail as a usage error before anything is sent. */
-async function expectUsage(h: Harness, ...argv: string[]): Promise<string> {
+async function expectUsage(h: Harness, message: string, ...argv: string[]): Promise<string> {
   expect(await h.run(...argv)).toBe(2);
   expect(h.created).toEqual([]);
   expect(h.stdout()).toBe("");
+  expect(h.stderr()).toBe(message);
   return h.stderr();
 }
 
 describe("--format", () => {
-  it("accepts srt, vtt, txt and json", async () => {
-    for (const format of ["srt", "vtt", "txt", "json"]) {
-      const h = cli();
-      expect(await h.run("transcript", "tr_1", "--format", format)).toBe(0);
-      expect(h.stdout()).not.toBe("");
-    }
-  });
-
-  it("rejects anything else on transcript and transcribe, with exit 2 and no request", async () => {
-    expect(await expectUsage(cli(), "transcript", "tr_1", "--format", "docx")).toContain(
-      "Allowed choices are srt, vtt, txt, json",
+  it.each([
+    ["transcript", "docx"],
+    ["transcribe", "pdf"],
+  ])("rejects format %s %s before any request", async (command, format) => {
+    await expectUsage(
+      cli(),
+      `Error: option '--format <format>' argument '${format}' is invalid. Allowed choices are srt, vtt, txt, json.\n`,
+      command,
+      command === "transcript" ? "tr_1" : file,
+      "--format",
+      format,
     );
-    await expectUsage(cli(), "transcribe", file, "--format", "pdf");
   });
 
   it("reports the error as JSON on stderr under --json", async () => {
     const h = cli();
-    const stderr = await expectUsage(h, "--json", "transcript", "tr_1", "--format", "docx");
+    const stderr = await expectUsage(
+      h,
+      `${JSON.stringify({ type: "error", code: "usage_error", numericCode: null, status: null, message: "option '--format <format>' argument 'docx' is invalid. Allowed choices are srt, vtt, txt, json.", hint: null })}\n`,
+      "--json",
+      "transcript",
+      "tr_1",
+      "--format",
+      "docx",
+    );
     expect(JSON.parse(stderr)).toMatchObject({
       code: "usage_error",
       numericCode: null,
@@ -87,9 +95,17 @@ describe("--format", () => {
   });
 
   it("conflicts with --json unless it is json", async () => {
-    expect(await expectUsage(cli(), "--json", "transcript", "tr_1", "--format", "srt")).toContain(
-      "usage_error",
-    );
+    expect(
+      await expectUsage(
+        cli(),
+        `${JSON.stringify({ type: "error", code: "usage_error", numericCode: null, status: null, message: "--json prints the transcript as JSON; drop --format or use --format json.", hint: null })}\n`,
+        "--json",
+        "transcript",
+        "tr_1",
+        "--format",
+        "srt",
+      ),
+    ).toContain("usage_error");
     const h = cli();
     expect(await h.run("--json", "transcript", "tr_1", "--format", "json")).toBe(0);
     expect(JSON.parse(h.stdout())).toMatchObject({ id: "tr_test_0001" });
@@ -103,50 +119,171 @@ describe("--format", () => {
 });
 
 describe("flag and argument validation, before any request", () => {
-  it("checks --language, --translate and the input file", async () => {
-    await expectUsage(cli(), "transcribe", file, "--language", "english!");
-    await expectUsage(cli(), "transcribe", file, "--translate", "es,,de");
-    await expectUsage(cli(), "transcribe", file, "--translate", "es,fr de");
-    await expectUsage(cli(), "transcribe", join(home, "missing.mp3"));
-    await expectUsage(cli(), "transcribe", home);
+  it.each(["english!", ""])("rejects --language %j", async (language) => {
+    await expectUsage(
+      cli(),
+      `Error: --language must be a language code such as en or pt-BR, not "${language}".\n`,
+      "transcribe",
+      file,
+      "--language",
+      language,
+    );
   });
 
-  it("checks --out", async () => {
-    await expectUsage(cli(), "transcribe", file, "--out", join(home, "nope", "out.txt"));
-    await expectUsage(cli(), "transcribe", file, "--out", home);
+  it.each([
+    ["es,,de", ""],
+    ["es,fr de", "fr de"],
+    ["", ""],
+    ["es,", ""],
+  ])("rejects --translate %j", async (value, invalid) => {
+    await expectUsage(
+      cli(),
+      `Error: --translate takes language codes separated by commas, such as es,de; "${invalid}" is not one.\n`,
+      "transcribe",
+      file,
+      "--translate",
+      value,
+    );
   });
 
-  it("checks --limit", async () => {
-    for (const limit of ["0", "-1", "1.5", "abc", "1000000"]) {
-      await expectUsage(cli(), "transcripts", "--limit", limit);
-    }
+  it("rejects a missing input file", async () => {
+    await expectUsage(
+      cli(),
+      `Error: No such file: ${join(home, "missing.mp3")}\n`,
+      "transcribe",
+      join(home, "missing.mp3"),
+    );
   });
 
-  it("checks transcript ids and --lang", async () => {
-    for (const id of ["..", ".", "a/b", "a b", "x".repeat(129)]) {
-      await expectUsage(cli(), "transcript", id);
-    }
-    await expectUsage(cli(), "transcript", "tr_1", "--lang", "es es");
-    await expectUsage(cli(), "transcript", "tr_1", "--lang", "es", "--format", "json");
+  it("rejects a folder as input", async () => {
+    await expectUsage(cli(), `Error: Not a file: ${home}\n`, "transcribe", home);
   });
 
-  it("checks the pack and --key", async () => {
-    await expectUsage(cli(), "buy", "huge", "--yes");
-    await expectUsage(cli(), "buy", "300min", "--yes", "--key", "bad key");
+  it("rejects --out into a missing folder", async () => {
+    await expectUsage(
+      cli(),
+      `Error: The folder for --out does not exist: ${join(home, "nope")}\n`,
+      "transcribe",
+      file,
+      "--out",
+      join(home, "nope", "out.txt"),
+    );
   });
 
-  it("rejects unknown commands and options, missing arguments and extra arguments", async () => {
-    await expectUsage(cli(), "frobnicate");
-    await expectUsage(cli(), "balance", "--nope");
-    await expectUsage(cli(), "transcribe");
-    await expectUsage(cli(), "balance", "extra");
+  it("rejects --out pointing to a folder", async () => {
+    await expectUsage(
+      cli(),
+      `Error: --out is a folder, not a file: ${home}\n`,
+      "transcribe",
+      file,
+      "--out",
+      home,
+    );
+  });
+
+  it.each(["0", "-1", "1.5", "abc", "1000000", " 5", "05", "+5", "1e3", ""])(
+    "rejects --limit %j",
+    async (limit) => {
+      await expectUsage(
+        cli(),
+        "Error: --limit must be a whole number from 1 to 999999.\n",
+        "transcripts",
+        "--limit",
+        limit,
+      );
+    },
+  );
+
+  it.each(["..", ".", "a/b", "a b", "x".repeat(129), ""])(
+    "rejects transcript id %j",
+    async (id) => {
+      await expectUsage(
+        cli(),
+        "Error: The transcript id must be 1 to 128 letters, digits, dots, dashes or underscores.\n",
+        "transcript",
+        id,
+      );
+    },
+  );
+
+  it("rejects an invalid --lang", async () => {
+    await expectUsage(
+      cli(),
+      'Error: --lang must be a translation language code or "cleaned", not "es es".\n',
+      "transcript",
+      "tr_1",
+      "--lang",
+      "es es",
+    );
+  });
+
+  it.each(["es", "original"])("rejects --lang %s with JSON output", async (language) => {
+    await expectUsage(
+      cli(),
+      "Error: --lang does not apply to JSON output, which holds every language.\n",
+      "transcript",
+      "tr_1",
+      "--lang",
+      language,
+      "--format",
+      "json",
+    );
+  });
+
+  it("rejects an invalid pack", async () => {
+    await expectUsage(
+      cli(),
+      "Error: The pack must look like 300min; run `hushscript packs` to list them.\n",
+      "buy",
+      "huge",
+      "--yes",
+    );
+  });
+
+  it("rejects an invalid --key", async () => {
+    await expectUsage(
+      cli(),
+      "Error: --key must be 1 to 128 characters from A-Z, a-z, 0-9, _ and -.\n",
+      "buy",
+      "300min",
+      "--yes",
+      "--key",
+      "bad key",
+    );
+  });
+
+  it.each([
+    [["frobnicate"], "Error: unknown command 'frobnicate'\n"],
+    [["balance", "--nope"], "Error: unknown option '--nope'\n"],
+    [["transcribe"], "Error: missing required argument 'file'\n"],
+    [
+      ["balance", "extra"],
+      "Error: too many arguments for 'balance'. Expected 0 arguments but got 1: extra.\n",
+    ],
+  ] as const)("rejects command arguments %j", async (argv, message) => {
+    await expectUsage(cli(), message, ...argv);
+  });
+
+  it("rejects an unknown option after an equals-form token", async () => {
+    await expectUsage(cli(), "Error: unknown option '--nope'\n", `--token=${TEST_TOKEN}`, "--nope");
   });
 
   it("never echoes a token typed as an unknown option", async () => {
-    const stderr = await expectUsage(cli(), `--token=${TEST_TOKEN}`, "--nope");
-    expect(stderr).not.toContain(TEST_TOKEN);
-    const mistyped = await expectUsage(cli(), `--tokn=${TEST_TOKEN}`, "balance");
-    expect(mistyped).not.toContain(TEST_TOKEN);
+    await expectUsage(
+      cli(),
+      "Error: unknown option '--tokn=[redacted]'\n",
+      `--tokn=${TEST_TOKEN}`,
+      "balance",
+    );
+  });
+
+  it("redacts a space-form token without the SDK token shape in a later error", async () => {
+    const secret = "plain-secret-value";
+    const h = cli();
+    h.api.balance.mockRejectedValue(new Error(`leaked ${secret}`));
+    expect(await h.run("--token", secret, "balance")).toBe(1);
+    expect(h.stderr()).toBe("Error: Unexpected error: leaked [redacted]\n");
+    await expectUsage(cli(), "Error: unknown option '--nope'\n", "--token", secret, "--nope");
   });
 });
 
@@ -154,22 +291,29 @@ describe("help and version", () => {
   it("prints the commands for --help and exits 0", async () => {
     const h = cli();
     expect(await h.run("--help")).toBe(0);
-    for (const command of [
+    const commandRows = h
+      .stdout()
+      .split("\n")
+      .filter((line) =>
+        /^ {2}(?:login|logout|balance|transcribe|resume|transcripts|transcript|jobs|packs|buy|help)(?: |$)/.test(
+          line,
+        ),
+      );
+    expect(commandRows.map((line) => line.trim().split(/ {2,}/)[0])).toEqual([
       "login",
       "logout",
       "balance",
-      "transcribe",
-      "resume",
-      "transcripts",
-      "transcript",
-      "jobs",
+      "transcribe [options] <file>",
+      "resume [options] <token> <file>",
+      "transcripts [options]",
+      "transcript [options] <id>",
+      "jobs [options]",
       "packs",
-      "buy",
-      "--json",
-      "--token",
-    ]) {
-      expect(h.stdout()).toContain(command);
-    }
+      "buy [options] <pack>",
+      "help [command]",
+    ]);
+    expect(h.stdout()).toContain("--json");
+    expect(h.stdout()).toContain("--token <token>");
   });
 
   it("prints the version for --version", async () => {

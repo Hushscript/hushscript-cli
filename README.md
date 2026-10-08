@@ -70,8 +70,8 @@ Every purchase has an idempotency key: the one from `--key`, or a fresh one the 
 purchase fails after it was sent, or the CLI is stopped by SIGINT, SIGTERM or SIGHUP once `buy` has
 started (exit code 130, also while the card is still being looked up), it prints the key and says
 "The purchase may have been sent. Retry with --key <key>: the same key never charges twice." Only a
-refusal that proves nothing was charged (a 400, 402, 403, 404 or 422 answer, such as `insufficient_balance`
-when the account cannot cover the pack) leaves the notice out; a 401 or 429 does not prove it, because the
+refusal that proves nothing was charged (a 400, 402, 404 or 422 answer, or a 403 with numeric code
+4021 or 4023) leaves the notice out; a 401 or 429 does not prove it, because the
 server answers those before it replays a purchase that already went through. Retry with the same key and
 it cannot be charged twice:
 

@@ -1,6 +1,7 @@
 // Runs the built binary (dist/index.js) against the conformance mock this container shares a network with.
 // The mock accepts any bearer token that starts with "hsr" and serves the one-speaker transcript for a finished job.
 import { spawn, spawnSync } from "node:child_process";
+import { deepStrictEqual } from "node:assert/strict";
 import { createServer } from "node:http";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -136,6 +137,210 @@ await step("balance --json prints one document", async () => {
     `unexpected balance ${result.stdout}`,
   );
   expect(result.stderr === "", "stderr is not empty");
+});
+
+await step("transcripts --json lists SDK summaries over the wire", async () => {
+  await mock("/__scenario", { mock: { listing: { count: 2 } } });
+  const result = cli(["transcripts", "--json"], { env: withToken });
+  expectStatus(result, 0);
+  deepStrictEqual(
+    parse(result.stdout),
+    {
+      transcripts: [
+        {
+          id: "tr_list_001",
+          title: "Synthetic 001",
+          language: "en",
+          durationSeconds: 60,
+          createdAt: "2025-10-09T08:52:20.000Z",
+          autoDeleteAt: null,
+          tags: [],
+        },
+        {
+          id: "tr_list_002",
+          title: "Synthetic 002",
+          language: "en",
+          durationSeconds: 60,
+          createdAt: "2025-10-09T08:51:20.000Z",
+          autoDeleteAt: null,
+          tags: [],
+        },
+      ],
+    },
+    `unexpected summaries: ${result.stdout}`,
+  );
+  expect(result.stderr === "", `stderr: ${result.stderr}`);
+});
+
+await step("jobs --json lists a completed SDK job over the wire", async () => {
+  await freshMock();
+  expectStatus(cli(["transcribe", sample, "--json"], { env: withToken }), 0);
+  const result = cli(["jobs", "--json"], { env: withToken });
+  expectStatus(result, 0);
+  deepStrictEqual(
+    parse(result.stdout),
+    {
+      jobs: [
+        {
+          id: "job_conf_0001",
+          state: "done",
+          transcriptId: "tr_conf_0001",
+          error: null,
+          failureKind: null,
+          mode: "standard",
+          declaredSeconds: 21,
+          verifiedSeconds: 21,
+          actualSeconds: 21,
+          billableSeconds: 21,
+          retryOf: null,
+          createdAt: "2025-10-09T08:53:20.000Z",
+          options: {
+            languageCode: null,
+            speakerDetection: true,
+            medicalMode: false,
+            multichannel: false,
+            translationTargets: [],
+            keyterms: false,
+            prompt: false,
+            autoGenerateInsights: null,
+          },
+        },
+      ],
+    },
+    `unexpected job: ${result.stdout}`,
+  );
+  expect(result.stderr === "", `stderr: ${result.stderr}`);
+});
+
+await step("packs --json lists SDK pack prices over the wire", async () => {
+  await freshMock();
+  const result = cli(["packs", "--json"], { env: withToken });
+  expectStatus(result, 0);
+  deepStrictEqual(
+    parse(result.stdout),
+    {
+      packs: [
+        {
+          id: "45min",
+          seconds: 2700,
+          minutes: 45,
+          price: { amount: 599, currency: "USD", formatted: "$5.99" },
+          bonusMinutes: 0,
+          available: true,
+        },
+        {
+          id: "300min",
+          seconds: 18_000,
+          minutes: 300,
+          price: { amount: 3499, currency: "USD", formatted: "$34.99" },
+          bonusMinutes: 0,
+          available: true,
+        },
+        {
+          id: "900min",
+          seconds: 54_000,
+          minutes: 900,
+          price: { amount: 8999, currency: "USD", formatted: "$89.99" },
+          bonusMinutes: 0,
+          available: true,
+        },
+        {
+          id: "1800min",
+          seconds: 108_000,
+          minutes: 1800,
+          price: { amount: 15_999, currency: "USD", formatted: "$159.99" },
+          bonusMinutes: 0,
+          available: true,
+        },
+        {
+          id: "6000min",
+          seconds: 360_000,
+          minutes: 6000,
+          price: { amount: 44_999, currency: "USD", formatted: "$449.99" },
+          bonusMinutes: 0,
+          available: true,
+        },
+      ],
+    },
+    `unexpected packs: ${result.stdout}`,
+  );
+  expect(result.stderr === "", `stderr: ${result.stderr}`);
+});
+
+await step("transcript success prints the SRT golden over the wire", async () => {
+  await mock("/__scenario", { mock: { listing: { count: 1 } } });
+  const result = cli(["transcript", "tr_list_001", "--format", "srt"], { env: withToken });
+  expectStatus(result, 0);
+  expect(result.stdout === golden, "transcript stdout differs from the SRT golden");
+  expect(result.stderr === "", `stderr: ${result.stderr}`);
+});
+
+await step("transcript --lang es prints the translation golden over the wire", async () => {
+  await mock("/__scenario", { mock: { fixture: "translated", listing: { count: 1 } } });
+  const translated = await (
+    await mock("/__files/fixtures/exports/translated.txt-default.es.txt")
+  ).text();
+  const result = cli(["transcript", "tr_list_001", "--lang", "es"], { env: withToken });
+  expectStatus(result, 0);
+  expect(result.stdout === translated, "transcript stdout differs from the Spanish TXT golden");
+  expect(result.stderr === "", `stderr: ${result.stderr}`);
+});
+
+for (const [name, contents] of /** @type {[string, string][]} */ ([
+  ["empty.mp3", ""],
+  ["unsupported.txt", "This is text, not supported audio."],
+])) {
+  await step(`transcribe ${name} surfaces SDK unsupported_media without requests`, async () => {
+    await freshMock();
+    const file = join(WORK, name);
+    writeFileSync(file, contents);
+    const result = cli(["transcribe", file, "--json"], { env: withToken });
+    expectStatus(result, 1);
+    expect(result.stdout === "", `stdout: ${result.stdout}`);
+    expect(errorCode(result.stderr) === "unsupported_media", `stderr: ${result.stderr}`);
+    const log = /** @type {unknown[]} */ (await mockJson("/__log"));
+    expect(log.length === 0, `preflight sent requests: ${JSON.stringify(log)}`);
+  });
+}
+
+await step("buy API 401 preserves SDK fields and the retry key over the wire", async () => {
+  await mock("/__scenario", { mock: { purchase: [{ status: 401, error: "unauthorized" }] } });
+  const key = "e2e-buy-401";
+  const result = cli(["buy", "300min", "--yes", "--key", key, "--json"], { env: withToken });
+  expectStatus(result, 1);
+  expect(result.stdout === "", `stdout: ${result.stdout}`);
+  const lines = result.stderr.trimEnd().split("\n");
+  expect(lines.length === 2, `stderr: ${result.stderr}`);
+  const notice = /** @type {{ type?: unknown, code?: unknown }} */ (parse(lines[0] ?? ""));
+  expect(notice.type === "notice" && notice.code === "no_refund", `stderr: ${result.stderr}`);
+  const report =
+    /** @type {{ type?: unknown, code?: unknown, numericCode?: unknown, status?: unknown, idempotencyKey?: unknown, hint?: unknown }} */ (
+      parse(lines[1] ?? "")
+    );
+  expect(
+    report.type === "error" &&
+      report.code === "unauthorized" &&
+      report.numericCode === 2000 &&
+      report.status === 401 &&
+      report.idempotencyKey === key,
+    `SDK error fields: ${result.stderr}`,
+  );
+  expect(
+    report.hint ===
+      `Your token is invalid, revoked or expired. Create a new one in the Hushscript app under Account → MCP. Changing your password revokes all tokens. The purchase may have been sent. Retry with --key ${key}: the same key never charges twice.`,
+    `retry hint: ${result.stderr}`,
+  );
+  const log =
+    /** @type {{ method: string, path: string, status: number, idempotencyKey: string | null }[]} */ (
+      await mockJson("/__log")
+    );
+  const purchases = log.filter(
+    (entry) => entry.method === "POST" && entry.path === "/v1/billing/purchase",
+  );
+  expect(
+    purchases.length === 1 && purchases[0]?.status === 401 && purchases[0].idempotencyKey === key,
+    `purchase requests: ${JSON.stringify(log)}`,
+  );
 });
 
 await step("buy without --yes and without a terminal exits 2 and sends nothing", async () => {

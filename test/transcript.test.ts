@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ApiError, NetworkError } from "@hushscript/sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { harness, transcript, TEST_TOKEN, type Harness } from "./helpers.ts";
 
@@ -55,4 +56,56 @@ describe("transcript --lang", () => {
     await h.run("transcript", "tr_1");
     expect(h.api.transcripts.get).toHaveBeenCalledWith("tr_1");
   });
+  it("accepts a 128-character transcript id", async () => {
+    const h = cli();
+    const id = "x".repeat(128);
+    expect(await h.run("transcript", id)).toBe(0);
+    expect(h.api.transcripts.get).toHaveBeenCalledWith(id);
+    expect(h.stdout()).toBe(transcript().toText());
+    expect(h.stderr()).toBe("");
+  });
+
+  it.each([
+    [
+      new ApiError({ code: "not_found", status: 404, message: "Missing." }),
+      "not_found",
+      404,
+      "Missing.",
+    ],
+    [new NetworkError({ message: "Offline." }), "network_error", null, "Offline."],
+  ] as const)("reports a get failure as JSON: %s", async (error, code, status, message) => {
+    const h = cli();
+    h.api.transcripts.get.mockRejectedValue(error);
+    expect(await h.run("transcript", "tr_1", "--json")).toBe(1);
+    expect(h.stdout()).toBe("");
+    expect(JSON.parse(h.stderr())).toEqual({
+      type: "error",
+      code,
+      numericCode: null,
+      status,
+      message,
+      hint: null,
+    });
+  });
+
+  it.each([
+    ["srt", false, ""],
+    ["srt", true, "\n"],
+    ["vtt", false, "WEBVTT\n\n\n"],
+    ["vtt", true, "WEBVTT\n\n\n"],
+    ["txt", false, ""],
+    ["txt", true, "\n"],
+  ] as const)(
+    "preserves empty %s bytes with stdoutIsTTY=%s",
+    async (format, stdoutIsTTY, expected) => {
+      const t = transcript({
+        body: { version: 1, original: { utterances: [] }, translations: {} },
+      });
+      const h = harness({ home, env: { HUSHSCRIPT_TOKEN: TEST_TOKEN }, stdoutIsTTY });
+      h.api.transcripts.get.mockResolvedValue(t);
+      expect(await h.run("transcript", "tr_1", "--format", format)).toBe(0);
+      expect(h.stdout()).toBe(expected);
+      expect(h.stderr()).toBe("");
+    },
+  );
 });

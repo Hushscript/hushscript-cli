@@ -4,6 +4,7 @@ import { defineConfig, type ViteUserConfig } from "vitest/config";
 
 const config: ViteUserConfig = defineConfig({
   test: {
+    allowOnly: false,
     include: ["test/**/*.test.ts"],
     maxWorkers: 4,
     coverage: {

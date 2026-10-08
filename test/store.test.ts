@@ -107,26 +107,27 @@ describe("the token file", () => {
     expect(h.stderr()).not.toContain(TEST_TOKEN);
   });
 
-  it("warns when group or others can read the token file, and still reads it", async () => {
-    const path = join(home, "config.json");
-    await saveToken(path, TEST_TOKEN, "linux");
-    const warnings: string[] = [];
-    const warn = (text: string): void => {
-      warnings.push(text);
-    };
-    expect(await readStoredToken(path, { platform: "linux", warn })).toBe(TEST_TOKEN);
-    expect(warnings).toEqual([]);
-    for (const mode of [0o640, 0o604, 0o644]) {
+  it.each([0o640, 0o604, 0o644, 0o660, 0o666])(
+    "warns when mode %o lets group or others read the token file",
+    async (mode) => {
+      const path = join(home, "config.json");
+      await saveToken(path, TEST_TOKEN, "linux");
+      const warnings: string[] = [];
+      const warn = (text: string): void => {
+        warnings.push(text);
+      };
+      expect(await readStoredToken(path, { platform: "linux", warn })).toBe(TEST_TOKEN);
+      expect(warnings).toEqual([]);
       await chmod(path, mode);
       expect(await readStoredToken(path, { platform: "linux", warn })).toBe(TEST_TOKEN);
-    }
-    expect(warnings).toHaveLength(3);
-    expect(warnings[0]).toContain(`${path} can be read by other users (mode 0640)`);
-    expect(warnings[0]).toContain(`chmod 600 ${path}`);
-    warnings.length = 0;
-    await readStoredToken(path, { platform: "win32", warn });
-    expect(warnings).toEqual([]);
-  });
+      expect(warnings).toEqual([
+        `${path} can be read by other users (mode ${mode.toString(8).padStart(4, "0")}). Run: chmod 600 ${path}`,
+      ]);
+      warnings.length = 0;
+      await readStoredToken(path, { platform: "win32", warn });
+      expect(warnings).toEqual([]);
+    },
+  );
 
   it("shows that warning once, on stderr, in a real command that uses the stored token", async () => {
     const h = harness({ home });
@@ -204,6 +205,41 @@ describe("token precedence", () => {
     }
   });
 
+  it.each(
+    [
+      ["transcribe", "recording.mp3"],
+      ["resume", "resume-token", "recording.mp3"],
+      ["buy", "300min", "--yes"],
+      ["transcripts"],
+      ["transcript", "tr_1"],
+      ["jobs"],
+      ["packs"],
+      ["balance"],
+      ["logout"],
+      ["login"],
+    ].flatMap((command) => ["", "  "].map((flag) => ({ command, flag }))),
+  )("rejects empty token $flag before $command.0 can act", async ({ command, flag }) => {
+    const path = join(home, ".config", "hushscript", "config.json");
+    await saveToken(path, OTHER_TOKEN, "linux");
+    await writeFile(join(home, "recording.mp3"), "audio");
+    const argv = command.map((arg) => (arg === "recording.mp3" ? join(home, arg) : arg));
+    const h = harness({ home, env: { HUSHSCRIPT_TOKEN: TEST_TOKEN }, secret: TEST_TOKEN });
+    expect(await h.run(...argv, "--token", flag, "--json")).toBe(2);
+    expect(JSON.parse(h.stderr())).toEqual({
+      type: "error",
+      code: "usage_error",
+      numericCode: null,
+      status: null,
+      message: command[0] === "login" ? "No token was entered." : "--token is empty.",
+      hint: command[0] === "login" ? null : "Pass a token, or leave the flag out.",
+    });
+    expect(h.stdout()).toBe("");
+    expect(h.created).toEqual([]);
+    expect(h.prompts).toEqual([]);
+    expect(h.secretPrompts).toEqual([]);
+    expect(await readStoredToken(path)).toBe(OTHER_TOKEN);
+  });
+
   it("does not read the store when an earlier source answers", async () => {
     const read = vi.fn(stored);
     await resolveToken({ flag: undefined, env: { HUSHSCRIPT_TOKEN: "from-env" }, stored: read });
@@ -228,6 +264,15 @@ describe("token precedence", () => {
     const h = harness({ home, env: { HUSHSCRIPT_TOKEN: OTHER_TOKEN } });
     expect(await h.run("balance", "--token", TEST_TOKEN)).toBe(0);
     expect(h.created[0]?.token).toBe(TEST_TOKEN);
+  });
+
+  it("redacts an SDK-echoed stored token by its token shape", async () => {
+    await saveToken(join(home, ".config", "hushscript", "config.json"), TEST_TOKEN, "linux");
+    const h = harness({ home });
+    h.api.balance.mockRejectedValue(new Error(`leaked ${TEST_TOKEN}`));
+    expect(await h.run("balance")).toBe(1);
+    expect(h.stderr()).toBe("Error: Unexpected error: leaked [redacted]\n");
+    expect(h.stdout()).toBe("");
   });
 
   it("exits 1 with a hint when there is no token anywhere", async () => {
@@ -289,6 +334,58 @@ describe("login and logout", () => {
     const h = harness({ home, secret: "\n" });
     expect(await h.run("login")).toBe(2);
     expect(await readStoredToken(file())).toBeNull();
+  });
+
+  it.each(["hsr-token\0hidden", "hsr-token\nhidden"])(
+    "rejects embedded control characters in a login token %j",
+    async (secret) => {
+      const h = harness({ home, secret });
+      expect(await h.run("login", "--json")).toBe(1);
+      expect(JSON.parse(h.stderr())).toMatchObject({
+        code: "config_invalid",
+        message:
+          "The token has spaces, control characters or non-ASCII characters in it; check how it was copied.",
+      });
+      expect(h.stdout()).toBe("");
+      expect(await readStoredToken(file())).toBeNull();
+    },
+  );
+
+  it("rejects EOF without a login token", async () => {
+    const h = harness({ home, secret: "" });
+    expect(await h.run("login", "--json")).toBe(2);
+    expect(JSON.parse(h.stderr())).toMatchObject({
+      code: "usage_error",
+      message: "No token was entered.",
+    });
+    expect(h.stdout()).toBe("");
+    expect(await readStoredToken(file())).toBeNull();
+  });
+
+  it("a second login replaces the token and tightens the file and folder modes", async () => {
+    expect(await harness({ home, secret: TEST_TOKEN }).run("login")).toBe(0);
+    await chmod(file(), 0o666);
+    await chmod(join(home, ".config", "hushscript"), 0o777);
+    expect(await harness({ home, secret: OTHER_TOKEN }).run("login")).toBe(0);
+    expect(await readStoredToken(file())).toBe(OTHER_TOKEN);
+    expect((await stat(file())).mode & 0o777).toBe(0o600);
+    expect((await stat(join(home, ".config", "hushscript"))).mode & 0o777).toBe(0o700);
+  });
+
+  it("scrubs a typed token from a later login error", async () => {
+    const secret = "hsr-typed-secret-value";
+    const base = join(home, secret);
+    await mkdir(base);
+    await mkdir(join(home, "target"));
+    await symlink(join(home, "target"), join(base, "hushscript"));
+    const h = harness({ home, secret, env: { XDG_CONFIG_HOME: base } });
+    expect(await h.run("login", "--json")).toBe(1);
+    expect(JSON.parse(h.stderr())).toMatchObject({
+      code: "config_invalid",
+      message: `The config folder ${join(home, "[redacted]", "hushscript")} is a symbolic link, so the token was not stored.`,
+    });
+    expect(h.stdout()).toBe("");
+    expect(h.stderr()).not.toContain(secret);
   });
 
   it("logout with an empty --token is a usage error and leaves the stored token alone", async () => {
