@@ -13,6 +13,7 @@ import { registerTranscripts } from "./commands/transcripts.ts";
 import type { Deps, Globals, Runtime } from "./context.ts";
 import { usageError } from "./errors.ts";
 import { Output } from "./output.ts";
+import { valueOf } from "./store.ts";
 
 const CLEAN_EXIT = new Set(["commander.helpDisplayed", "commander.version"]);
 
@@ -64,9 +65,9 @@ function buildProgram(rt: Runtime, program: Command, shown: { text: string }): v
 
 /** Runs one invocation (arguments after the program name) and returns the exit code. */
 export async function run(argv: readonly string[], deps: Deps): Promise<number> {
-  const secrets = [...tokensIn(argv)];
-  const envToken = deps.env["HUSHSCRIPT_TOKEN"];
-  if (envToken !== undefined && envToken !== "") secrets.push(envToken);
+  const secrets = tokensIn(argv).filter((token) => valueOf(token) !== undefined);
+  const envToken = valueOf(deps.env["HUSHSCRIPT_TOKEN"]);
+  if (envToken !== undefined) secrets.push(envToken);
   const program = new Command();
   const out = new Output(deps.io, argv.includes("--json"), secrets);
   const rt: Runtime = {
@@ -75,7 +76,7 @@ export async function run(argv: readonly string[], deps: Deps): Promise<number> 
     secrets,
     globals: () => {
       const options = program.opts<{ json?: boolean; token?: string }>();
-      const globals: Globals = { json: options.json === true, token: options.token };
+      const globals: Globals = { json: options.json === true, token: valueOf(options.token) };
       return globals;
     },
   };

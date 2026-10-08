@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { chmod, lstat, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { CliError, usageError } from "./errors.ts";
+import { CliError } from "./errors.ts";
 import { shellWord } from "./shell.ts";
 
 export interface Environment {
@@ -13,15 +13,16 @@ export interface Environment {
 /** `$XDG_CONFIG_HOME/hushscript/config.json`, `~/.config/...` without it, `%APPDATA%\hushscript\config.json` on Windows. */
 export function configPath({ env, platform, homedir }: Environment): string {
   if (platform === "win32") {
-    const base = nonEmpty(env["APPDATA"]) ?? join(homedir, "AppData", "Roaming");
+    const base = valueOf(env["APPDATA"]) ?? join(homedir, "AppData", "Roaming");
     return join(base, "hushscript", "config.json");
   }
-  const base = nonEmpty(env["XDG_CONFIG_HOME"]) ?? join(homedir, ".config");
+  const base = valueOf(env["XDG_CONFIG_HOME"]) ?? join(homedir, ".config");
   return join(base, "hushscript", "config.json");
 }
 
-function nonEmpty(value: string | undefined): string | undefined {
-  return value === undefined || value === "" ? undefined : value;
+/** A string setting, or undefined when it is missing, empty or only whitespace: all of those mean "not set". */
+export function valueOf(value: string | null | undefined): string | undefined {
+  return value === undefined || value === null || value.trim() === "" ? undefined : value;
 }
 
 function isMissing(error: unknown): boolean {
@@ -50,7 +51,7 @@ async function warnIfShared(path: string, { platform, warn }: ReadOptions): Prom
   warn(`${path} can be read by other users (mode ${mode}). Run: chmod 600 ${shellWord(path)}`);
 }
 
-/** The stored token, or null when nobody logged in. Warns when other users can read the file; it is still read. */
+/** The stored token, or null when nobody logged in or the file holds an empty or whitespace-only token. Warns when other users can read the file; it is still read. */
 export async function readStoredToken(path: string, options?: ReadOptions): Promise<string | null> {
   let raw: string;
   try {
@@ -66,7 +67,8 @@ export async function readStoredToken(path: string, options?: ReadOptions): Prom
     throw storeError(path, "is not valid JSON");
   }
   const token = (parsed as { token?: unknown } | null)?.token;
-  if (typeof token !== "string" || token === "") throw storeError(path, "holds no token");
+  if (typeof token !== "string") throw storeError(path, "holds no token");
+  if (valueOf(token) === undefined) return null;
   if (options !== undefined) await warnIfShared(path, options);
   return token;
 }
@@ -118,26 +120,17 @@ export async function removeToken(path: string): Promise<boolean> {
   }
 }
 
-/** `--token ""` is a usage error, in every command that sees the flag. */
-export function rejectEmptyTokenFlag(flag: string | undefined): void {
-  if (flag?.trim() === "") {
-    throw usageError("--token is empty.", "Pass a token, or leave the flag out.");
-  }
-}
-
 export interface TokenSources {
   flag: string | undefined;
   env: Record<string, string | undefined>;
   stored: () => Promise<string | null>;
 }
 
-/** `--token`, then `HUSHSCRIPT_TOKEN`, then the stored token. The store is not read when an earlier source answers. */
+/** `--token`, then `HUSHSCRIPT_TOKEN`, then the stored token; an empty or whitespace-only one is skipped. The store is not read when an earlier source answers. */
 export async function resolveToken(sources: TokenSources): Promise<string | null> {
-  if (sources.flag !== undefined) {
-    rejectEmptyTokenFlag(sources.flag);
-    return sources.flag;
-  }
-  const fromEnv = nonEmpty(sources.env["HUSHSCRIPT_TOKEN"]);
+  const fromFlag = valueOf(sources.flag);
+  if (fromFlag !== undefined) return fromFlag;
+  const fromEnv = valueOf(sources.env["HUSHSCRIPT_TOKEN"]);
   if (fromEnv !== undefined) return fromEnv;
   return await sources.stored();
 }

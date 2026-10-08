@@ -12,9 +12,32 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CliError } from "../src/errors.ts";
 import { configPath, readStoredToken, removeToken, resolveToken, saveToken } from "../src/store.ts";
 import { harness, OTHER_TOKEN, TEST_TOKEN } from "./helpers.ts";
+
+/** Every kind of "not set": empty, ASCII whitespace, and the Unicode spaces String.prototype.trim removes. */
+const BLANKS = [
+  "",
+  " ",
+  "   ",
+  "\t",
+  "\n",
+  "\u00a0",
+  "\u2003",
+  "\u3000",
+  "\ufeff",
+  "\u2028",
+  " \t\n\u00a0 ",
+];
+
+const MISSING_TOKEN_REPORT = {
+  type: "error",
+  code: "config_invalid",
+  numericCode: null,
+  status: null,
+  message: "No Hushscript token.",
+  hint: "Run `hushscript login`, set HUSHSCRIPT_TOKEN, or pass --token. Create a token in the Hushscript app under Account, Connected apps.",
+};
 
 let home: string;
 
@@ -33,8 +56,8 @@ describe("configPath", () => {
     ).toBe("/x/cfg/hushscript/config.json");
   });
 
-  it("falls back to ~/.config, also for an empty XDG_CONFIG_HOME", () => {
-    expect(configPath({ env: { XDG_CONFIG_HOME: "" }, platform: "linux", homedir: "/h" })).toBe(
+  it.each(BLANKS)("falls back to ~/.config for XDG_CONFIG_HOME %j", (blank) => {
+    expect(configPath({ env: { XDG_CONFIG_HOME: blank }, platform: "linux", homedir: "/h" })).toBe(
       "/h/.config/hushscript/config.json",
     );
   });
@@ -44,6 +67,9 @@ describe("configPath", () => {
       configPath({ env, platform: "win32", homedir: "/h" });
     expect(win({ APPDATA: "/ad" })).toBe("/ad/hushscript/config.json");
     expect(win({})).toBe("/h/AppData/Roaming/hushscript/config.json");
+    for (const blank of BLANKS) {
+      expect(win({ APPDATA: blank })).toBe("/h/AppData/Roaming/hushscript/config.json");
+    }
   });
 });
 
@@ -152,15 +178,35 @@ describe("the token file", () => {
     expect(await readStoredToken(join(home, "missing.json"))).toBeNull();
   });
 
-  it("refuses a file that is not JSON, holds no token or cannot be read", async () => {
+  it("refuses a file that is not JSON, holds no token string or cannot be read", async () => {
     const path = join(home, "config.json");
-    for (const text of ["not json", "{}", '{"token":""}', "null"]) {
+    const cases: [string, string][] = [
+      ["not json", "is not valid JSON"],
+      ["{}", "holds no token"],
+      ["null", "holds no token"],
+      ['{"token":5}', "holds no token"],
+      ['{"token":null}', "holds no token"],
+    ];
+    for (const [text, problem] of cases) {
       await writeFile(path, text);
-      await expect(readStoredToken(path)).rejects.toBeInstanceOf(CliError);
+      await expect(readStoredToken(path)).rejects.toMatchObject({
+        name: "CliError",
+        code: "config_invalid",
+        message: `The config file at ${path} ${problem}.`,
+      });
     }
     await rm(path);
     await mkdir(path);
-    await expect(readStoredToken(path)).rejects.toMatchObject({ code: "config_invalid" });
+    await expect(readStoredToken(path)).rejects.toMatchObject({
+      code: "config_invalid",
+      message: `The config file at ${path} could not be read.`,
+    });
+  });
+
+  it.each(BLANKS)("reads an empty or whitespace-only stored token %j as not set", async (blank) => {
+    const path = join(home, "config.json");
+    await writeFile(path, JSON.stringify({ token: blank }));
+    expect(await readStoredToken(path)).toBeNull();
   });
 
   it("is deleted by removeToken, which says whether there was one", async () => {
@@ -189,21 +235,96 @@ describe("token precedence", () => {
     );
   });
 
-  it("treats an empty --token as a usage error instead of falling through", async () => {
-    const env = { HUSHSCRIPT_TOKEN: "from-env" };
-    for (const flag of ["", "  "]) {
-      await expect(resolveToken({ flag, env, stored })).rejects.toMatchObject({
-        code: "usage_error",
-        exitCode: 2,
-      });
-    }
-    for (const argv of [["--token", ""], ["--token="]]) {
-      const h = harness({ home, env });
-      expect(await h.run("balance", ...argv)).toBe(2);
-      expect(h.stderr()).toContain("--token is empty");
-      expect(h.created).toEqual([]);
-    }
+  it.each(BLANKS)("skips a blank --token %j and takes HUSHSCRIPT_TOKEN", async (blank) => {
+    expect(await resolveToken({ flag: blank, env: { HUSHSCRIPT_TOKEN: "from-env" }, stored })).toBe(
+      "from-env",
+    );
   });
+
+  it.each(BLANKS)("skips a blank HUSHSCRIPT_TOKEN %j and takes the stored token", async (blank) => {
+    expect(await resolveToken({ flag: undefined, env: { HUSHSCRIPT_TOKEN: blank }, stored })).toBe(
+      "stored",
+    );
+  });
+
+  it.each(BLANKS)("falls to the stored token when flag and env are both %j", async (blank) => {
+    expect(await resolveToken({ flag: blank, env: { HUSHSCRIPT_TOKEN: blank }, stored })).toBe(
+      "stored",
+    );
+  });
+
+  it("resolves to null when every source is blank or missing", async () => {
+    const none = (): Promise<string | null> => Promise.resolve(null);
+    expect(
+      await resolveToken({ flag: " ", env: { HUSHSCRIPT_TOKEN: "\t" }, stored: none }),
+    ).toBeNull();
+    expect(await resolveToken({ flag: undefined, env: {}, stored: none })).toBeNull();
+  });
+
+  it("returns a real token untouched, including spaces around it", async () => {
+    expect(await resolveToken({ flag: " from-flag ", env: {}, stored })).toBe(" from-flag ");
+    expect(await resolveToken({ flag: undefined, env: { HUSHSCRIPT_TOKEN: " e " }, stored })).toBe(
+      " e ",
+    );
+  });
+
+  it.each(BLANKS)(
+    "a blank --token %j in a real command falls back to the environment",
+    async (blank) => {
+      const h = harness({ home, env: { HUSHSCRIPT_TOKEN: TEST_TOKEN } });
+      await saveToken(join(home, ".config", "hushscript", "config.json"), OTHER_TOKEN, "linux");
+      expect(await h.run("balance", "--token", blank)).toBe(0);
+      expect(h.created).toEqual([{ token: TEST_TOKEN, baseUrl: undefined }]);
+    },
+  );
+
+  it("treats --token= as not set", async () => {
+    const h = harness({ home, env: { HUSHSCRIPT_TOKEN: TEST_TOKEN } });
+    expect(await h.run("balance", "--token=")).toBe(0);
+    expect(h.created).toEqual([{ token: TEST_TOKEN, baseUrl: undefined }]);
+  });
+
+  it.each(BLANKS)(
+    "a blank HUSHSCRIPT_TOKEN %j in a real command falls back to the store",
+    async (blank) => {
+      const h = harness({ home, env: { HUSHSCRIPT_TOKEN: blank } });
+      await saveToken(join(home, ".config", "hushscript", "config.json"), OTHER_TOKEN, "linux");
+      expect(await h.run("balance")).toBe(0);
+      expect(h.created).toEqual([{ token: OTHER_TOKEN, baseUrl: undefined }]);
+    },
+  );
+
+  it.each(BLANKS)(
+    "a blank stored token %j means not set, so the missing-token error follows",
+    async (blank) => {
+      await mkdir(join(home, ".config", "hushscript"), { recursive: true });
+      await writeFile(
+        join(home, ".config", "hushscript", "config.json"),
+        JSON.stringify({ token: blank }),
+      );
+      const h = harness({ home });
+      expect(await h.run("balance", "--json")).toBe(1);
+      expect(JSON.parse(h.stderr())).toEqual(MISSING_TOKEN_REPORT);
+      expect(h.created).toEqual([]);
+    },
+  );
+
+  it.each(BLANKS)(
+    "blank flag, env and stored token %j report the missing token with its hint",
+    async (blank) => {
+      await mkdir(join(home, ".config", "hushscript"), { recursive: true });
+      await writeFile(
+        join(home, ".config", "hushscript", "config.json"),
+        JSON.stringify({ token: blank }),
+      );
+      const h = harness({ home, env: { HUSHSCRIPT_TOKEN: blank } });
+      expect(await h.run("balance", "--token", blank)).toBe(1);
+      expect(h.stderr()).toBe(
+        "Error: No Hushscript token.\nHint: Run `hushscript login`, set HUSHSCRIPT_TOKEN, or pass --token. Create a token in the Hushscript app under Account, Connected apps.\n",
+      );
+      expect(h.created).toEqual([]);
+    },
+  );
 
   it.each(
     [
@@ -215,30 +336,17 @@ describe("token precedence", () => {
       ["jobs"],
       ["packs"],
       ["balance"],
-      ["logout"],
-      ["login"],
-    ].flatMap((command) => ["", "  "].map((flag) => ({ command, flag }))),
-  )("rejects empty token $flag before $command.0 can act", async ({ command, flag }) => {
-    const path = join(home, ".config", "hushscript", "config.json");
-    await saveToken(path, OTHER_TOKEN, "linux");
-    await writeFile(join(home, "recording.mp3"), "audio");
-    const argv = command.map((arg) => (arg === "recording.mp3" ? join(home, arg) : arg));
-    const h = harness({ home, env: { HUSHSCRIPT_TOKEN: TEST_TOKEN }, secret: TEST_TOKEN });
-    expect(await h.run(...argv, "--token", flag, "--json")).toBe(2);
-    expect(JSON.parse(h.stderr())).toEqual({
-      type: "error",
-      code: "usage_error",
-      numericCode: null,
-      status: null,
-      message: command[0] === "login" ? "No token was entered." : "--token is empty.",
-      hint: command[0] === "login" ? null : "Pass a token, or leave the flag out.",
-    });
-    expect(h.stdout()).toBe("");
-    expect(h.created).toEqual([]);
-    expect(h.prompts).toEqual([]);
-    expect(h.secretPrompts).toEqual([]);
-    expect(await readStoredToken(path)).toBe(OTHER_TOKEN);
-  });
+    ].flatMap((command) => ["", "  ", "\u00a0\u3000"].map((flag) => ({ command, flag }))),
+  )(
+    "a blank --token $flag does not stop $command.0, which uses the environment token",
+    async ({ command, flag }) => {
+      await writeFile(join(home, "recording.mp3"), "audio");
+      const argv = command.map((arg) => (arg === "recording.mp3" ? join(home, arg) : arg));
+      const h = harness({ home, env: { HUSHSCRIPT_TOKEN: TEST_TOKEN } });
+      expect(await h.run(...argv, "--token", flag, "--json")).toBe(0);
+      expect(h.created).toEqual([{ token: TEST_TOKEN, baseUrl: undefined }]);
+    },
+  );
 
   it("does not read the store when an earlier source answers", async () => {
     const read = vi.fn(stored);
@@ -258,6 +366,21 @@ describe("token precedence", () => {
     await saveToken(join(home, ".config", "hushscript", "config.json"), OTHER_TOKEN, "linux");
     expect(await h.run("balance")).toBe(0);
     expect(h.created).toEqual([{ token: OTHER_TOKEN, baseUrl: "http://127.0.0.1:4010" }]);
+  });
+
+  it.each(BLANKS)("passes no base URL when HUSHSCRIPT_BASE_URL is %j", async (blank) => {
+    const h = harness({ home, env: { HUSHSCRIPT_TOKEN: TEST_TOKEN, HUSHSCRIPT_BASE_URL: blank } });
+    expect(await h.run("balance")).toBe(0);
+    expect(h.created).toEqual([{ token: TEST_TOKEN, baseUrl: undefined }]);
+  });
+
+  it("passes a real HUSHSCRIPT_BASE_URL on untouched", async () => {
+    const h = harness({
+      home,
+      env: { HUSHSCRIPT_TOKEN: TEST_TOKEN, HUSHSCRIPT_BASE_URL: " http://127.0.0.1:4010 " },
+    });
+    expect(await h.run("balance")).toBe(0);
+    expect(h.created).toEqual([{ token: TEST_TOKEN, baseUrl: " http://127.0.0.1:4010 " }]);
   });
 
   it("lets --token beat both", async () => {
@@ -388,17 +511,27 @@ describe("login and logout", () => {
     expect(h.stderr()).not.toContain(secret);
   });
 
-  it("logout with an empty --token is a usage error and leaves the stored token alone", async () => {
-    const h = harness({ home, secret: TEST_TOKEN });
-    await h.run("login");
-    for (const argv of [["--token", ""], ["--token="], ["--token", "  "]]) {
-      const again = harness({ home });
-      expect(await again.run("logout", ...argv)).toBe(2);
-      expect(again.stderr()).toContain("--token is empty");
-      expect(again.stdout()).toBe("");
+  it.each(BLANKS)(
+    "login with a blank --token %j prompts as if the flag were absent",
+    async (blank) => {
+      const h = harness({ home, secret: TEST_TOKEN });
+      expect(await h.run("login", "--token", blank, "--json")).toBe(0);
+      expect(h.secretPrompts).toEqual(["Hushscript token: "]);
+      expect(h.stderr()).toBe("");
       expect(await readStoredToken(file())).toBe(TEST_TOKEN);
-    }
-  });
+    },
+  );
+
+  it.each(BLANKS)(
+    "logout with a blank --token %j ignores it and deletes the stored token",
+    async (blank) => {
+      await harness({ home, secret: TEST_TOKEN }).run("login");
+      const again = harness({ home });
+      expect(await again.run("logout", "--token", blank, "--json")).toBe(0);
+      expect(JSON.parse(again.stdout())).toEqual({ removed: true });
+      expect(await readStoredToken(file())).toBeNull();
+    },
+  );
 
   it("logout deletes the token and says so, also when there was none", async () => {
     const h = harness({ home, secret: TEST_TOKEN });

@@ -31,8 +31,11 @@ stdin.
 - If the config folder is a symbolic link, `login` refuses with exit code 1 instead of changing the
   mode of whatever the link points at. Replace the link with a real folder, or point
   `XDG_CONFIG_HOME` at one.
-- `--token ""` is a usage error (exit code 2) in every command, `logout` included; it does not fall
-  back to the other sources, and `logout` leaves the stored token alone.
+- A source that is empty or only whitespace counts as not set: `--token ""`, an empty
+  `HUSHSCRIPT_TOKEN`, an empty `token` in the stored file, and likewise `HUSHSCRIPT_BASE_URL`,
+  `XDG_CONFIG_HOME` and `APPDATA`. The CLI moves on to the next source; with none left it reports
+  "No Hushscript token." (exit code 1). `login --token ""` prompts as if the flag was absent, and
+  `logout` ignores `--token`.
 
 ## Commands
 
