@@ -128,3 +128,56 @@ describe("confirm", () => {
     expect((await ask("y\n")).output).toBe("Sure? ");
   });
 });
+
+const LISTENED_EVENTS = ["data", "end", "close", "readable", "keypress", "error"] as const;
+
+function listenerCounts(input: PassThrough): Record<string, number> {
+  return Object.fromEntries(LISTENED_EVENTS.map((event) => [event, input.listenerCount(event)]));
+}
+
+describe("listeners left on the input", () => {
+  it.each([
+    ["enter", "abc\r"],
+    ["Ctrl-D", "abc\u0004"],
+    ["Ctrl-C", "abc\u0003"],
+  ])("readSecret on a terminal leaves none after %s", async (_key, keys) => {
+    const { input } = terminal();
+    const before = listenerCounts(input);
+    const answer = readSecret(input, sink().stream, "Token: ");
+    expect(input.listenerCount("data")).toBe((before["data"] ?? 0) + 1);
+    input.write(keys);
+    await answer.catch(() => undefined);
+    expect(listenerCounts(input)).toEqual(before);
+  });
+
+  it.each([
+    ["yes", "y\n", true],
+    ["no", "n\n", false],
+  ])("confirm leaves none after the answer %s", async (_name, text, expected) => {
+    const input = new PassThrough();
+    const before = listenerCounts(input);
+    const answer = confirm(input, sink().stream, "Sure? ");
+    expect(input.listenerCount("data")).toBeGreaterThan(before["data"] ?? 0);
+    input.write(text);
+    expect(await answer).toBe(expected);
+    expect(listenerCounts(input)).toEqual(before);
+  });
+
+  it("confirm leaves none after EOF", async () => {
+    const input = new PassThrough();
+    const before = listenerCounts(input);
+    const answer = confirm(input, sink().stream, "Sure? ");
+    input.end();
+    expect(await answer).toBe(false);
+    expect(listenerCounts(input)).toEqual(before);
+  });
+
+  it("confirm leaves none after the input is closed without an end", async () => {
+    const input = new PassThrough();
+    const before = listenerCounts(input);
+    const answer = confirm(input, sink().stream, "Sure? ");
+    input.destroy();
+    expect(await answer).toBe(false);
+    expect(listenerCounts(input)).toEqual(before);
+  });
+});

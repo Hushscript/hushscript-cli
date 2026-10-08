@@ -68,20 +68,28 @@ export async function readSecret(
 }
 
 /**
- * A yes/no question. EOF and anything but y or yes answer no. The terminal stays in cooked mode, so
- * Ctrl-C reaches the process as SIGINT and ends it with the interrupt status.
+ * A yes/no question. EOF, a closed input and anything but y or yes answer no. The terminal stays in
+ * cooked mode, so Ctrl-C reaches the process as SIGINT and ends it with the interrupt status. No listener
+ * stays on `input` afterwards: readline removes its own when it closes, so that handler is left alone.
  */
 export async function confirm(input: Readable, output: Writable, prompt: string): Promise<boolean> {
   const lines = createInterface({ input, output, terminal: false });
   return await new Promise<boolean>((resolve) => {
+    let answer = false;
+    const onInputClose = (): void => {
+      lines.close();
+    };
+    // Registered after readline's own close handler, so the input is already released when this runs.
     lines.once("close", () => {
-      resolve(false);
+      input.off("close", onInputClose);
+      resolve(answer);
     });
+    // A destroyed input emits close but no end, which readline does not notice.
+    input.once("close", onInputClose);
     output.write(prompt);
     lines.once("line", (line) => {
-      lines.removeAllListeners("close");
+      answer = /^\s*y(?:es)?\s*$/i.test(line);
       lines.close();
-      resolve(/^\s*y(?:es)?\s*$/i.test(line));
     });
   });
 }
