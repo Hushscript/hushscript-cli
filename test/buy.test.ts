@@ -218,9 +218,13 @@ describe("buy without --yes", () => {
     },
   );
 
-  it.each(["SIGINT", "SIGTERM", "SIGHUP"] as const)(
-    "exits silently on %s during the confirm prompt before buying",
-    async (signal) => {
+  it.each(
+    (["SIGINT", "SIGTERM", "SIGHUP"] as const).flatMap((signal) =>
+      [false, true].map((json) => ({ signal, json })),
+    ),
+  )(
+    "exits silently on $signal during the confirm prompt before buying (json: $json)",
+    async ({ signal, json }) => {
       const h = cli();
       const listeners = new Map<NodeJS.Signals, () => void>();
       const exit = vi.fn();
@@ -237,7 +241,7 @@ describe("buy without --yes", () => {
         },
         exit,
       });
-      void run(["buy", "300min"], {
+      void run(json ? ["buy", "300min", "--json"] : ["buy", "300min"], {
         homedir: home,
         platform: "linux",
         env: { HUSHSCRIPT_TOKEN: TEST_TOKEN },
@@ -266,7 +270,11 @@ describe("buy without --yes", () => {
       expect(h.api.buy).not.toHaveBeenCalled();
       expect(stdout).not.toHaveBeenCalled();
       expect(stderr.mock.calls).toEqual([
-        [`${NO_REFUND_NOTICE}\n`],
+        [
+          json
+            ? `${JSON.stringify({ type: "notice", code: "no_refund", message: NO_REFUND_NOTICE })}\n`
+            : `${NO_REFUND_NOTICE}\n`,
+        ],
         ["Buy 300min with your saved default card? [y/N] "],
       ]);
     },

@@ -69,6 +69,10 @@ Without a terminal (stdin and stderr both) and without `--yes` it exits with cod
 hushscript buy 300min --yes
 ```
 
+A stop signal (SIGINT, SIGTERM or SIGHUP) while `buy` waits for your answer prints nothing and exits
+with 130: the no-refund notice and the question are already on stderr, nothing was sent and nothing
+was charged.
+
 Every purchase has an idempotency key: the one from `--key`, or a fresh one the CLI makes. If a
 purchase fails after it was sent, or the CLI is stopped by SIGINT, SIGTERM or SIGHUP once `buy` has
 started (exit code 130, also while the card is still being looked up), it prints the key and says
