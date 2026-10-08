@@ -417,9 +417,11 @@ describe("error reporting", () => {
     expect(h.stderr()).toContain("[redacted]");
   });
 
-  it("scrubs only secrets long enough to be one", () => {
-    expect(scrub("a short secret: abc", ["abc"])).toBe("a short secret: abc");
+  it("scrubs a secret whatever its length, and skips a blank one", () => {
+    expect(scrub("a short secret: abc", ["abc"])).toBe("a short secret: [redacted]");
+    expect(scrub("x", ["x"])).toBe("[redacted]");
     expect(scrub("the secret-value here", ["secret-value"])).toBe("the [redacted] here");
+    expect(scrub("a b", ["", " ", "\t"])).toBe("a b");
     expect(describeError(new Error(""), []).message).toBe("The CLI failed unexpectedly.");
   });
 });

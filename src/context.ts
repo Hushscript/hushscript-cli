@@ -70,6 +70,14 @@ export interface Runtime {
   globals(): Globals;
 }
 
+/** Hides a token from error output as given and trimmed, because the SDK sends it trimmed. A blank one is not a token. */
+export function registerSecret(secrets: string[], token: string): void {
+  if (token.trim() === "") return;
+  for (const form of [token, token.trim()]) {
+    if (!secrets.includes(form)) secrets.push(form);
+  }
+}
+
 export function storePath(deps: Deps): string {
   return configPath(deps);
 }
@@ -96,6 +104,6 @@ export async function openClient(rt: Runtime): Promise<Api> {
     });
   }
   // The flag and the environment token are in `secrets` already; the stored one is added once it is read.
-  if (!rt.secrets.includes(token)) rt.secrets.push(token);
+  registerSecret(rt.secrets, token);
   return deps.createClient({ token, baseUrl: valueOf(deps.env["HUSHSCRIPT_BASE_URL"]) });
 }

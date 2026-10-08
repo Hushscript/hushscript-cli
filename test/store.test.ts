@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { ApiError } from "@hushscript/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configPath, readStoredToken, removeToken, resolveToken, saveToken } from "../src/store.ts";
-import { harness, OTHER_TOKEN, TEST_TOKEN } from "./helpers.ts";
+import { harness, OTHER_TOKEN, TEST_TOKEN, type Harness } from "./helpers.ts";
 
 /** Every kind of "not set": empty, ASCII whitespace, and the Unicode spaces String.prototype.trim removes. */
 const BLANKS = [
@@ -449,14 +449,23 @@ describe("token precedence", () => {
 
     it("is redacted from an unexpected error, in both modes", async () => {
       await withStoredOddToken();
-      for (const argv of [[], ["--json"]]) {
-        const h = harness({ home });
-        h.api.balance.mockRejectedValue(new Error(`leaked ${ODD_TOKEN}`));
-        expect(await h.run("balance", ...argv)).toBe(1);
-        expect(h.stderr()).not.toContain(ODD_TOKEN);
-        expect(h.stderr()).toContain("leaked [redacted]");
-        expect(h.stdout()).toBe("");
-      }
+      const text = harness({ home });
+      text.api.balance.mockRejectedValue(new Error(`leaked ${ODD_TOKEN}`));
+      expect(await text.run("balance")).toBe(1);
+      expect(text.stderr()).toBe("Error: Unexpected error: leaked [redacted]\n");
+      expect(text.stdout()).toBe("");
+      const json = harness({ home });
+      json.api.balance.mockRejectedValue(new Error(`leaked ${ODD_TOKEN}`));
+      expect(await json.run("balance", "--json")).toBe(1);
+      expect(JSON.parse(json.stderr())).toEqual({
+        type: "error",
+        code: "unexpected_error",
+        numericCode: null,
+        status: null,
+        message: "Unexpected error: leaked [redacted]",
+        hint: null,
+      });
+      expect(json.stdout()).toBe("");
     });
 
     it("is redacted from a purchase error that gets a retry notice", async () => {
@@ -479,6 +488,123 @@ describe("token precedence", () => {
         code: "bad_gateway",
         message: "Upstream saw [redacted].",
         idempotencyKey: "k-odd",
+      });
+    });
+  });
+
+  describe("R104: every token the CLI knows is scrubbed from stderr, trimmed and as given, whatever its length", () => {
+    const SHORT_TOKEN = "hsr1x";
+    const PADDED = "  padded-secret-token  ";
+    const TRIMMED = "padded-secret-token";
+
+    function echo(token: string): ApiError {
+      return new ApiError({
+        code: "bad_request",
+        status: 400,
+        message: `Rejected ${token}.`,
+        hint: `Check ${token}.`,
+      });
+    }
+
+    async function expectScrubbed(setup: () => Harness, shown: string[]): Promise<void> {
+      for (const shownToken of shown) {
+        const text = setup();
+        text.api.balance.mockRejectedValue(echo(shownToken));
+        expect(await text.run("balance")).toBe(1);
+        expect(text.stderr()).toBe("Error: Rejected [redacted].\nHint: Check [redacted].\n");
+        expect(text.stdout()).toBe("");
+        const json = setup();
+        json.api.balance.mockRejectedValue(echo(shownToken));
+        expect(await json.run("balance", "--json")).toBe(1);
+        expect(JSON.parse(json.stderr())).toEqual({
+          type: "error",
+          code: "bad_request",
+          numericCode: null,
+          status: 400,
+          message: "Rejected [redacted].",
+          hint: "Check [redacted].",
+        });
+        expect(json.stdout()).toBe("");
+      }
+    }
+
+    it("hides a 5-character stored token echoed in an API error", async () => {
+      await saveToken(join(home, ".config", "hushscript", "config.json"), SHORT_TOKEN, "linux");
+      await expectScrubbed(() => harness({ home }), [SHORT_TOKEN]);
+    });
+
+    it("hides a 5-character token from the environment and from --token", async () => {
+      await expectScrubbed(
+        () => harness({ home, env: { HUSHSCRIPT_TOKEN: SHORT_TOKEN } }),
+        [SHORT_TOKEN],
+      );
+      const flag = harness({ home });
+      flag.api.balance.mockRejectedValue(echo(SHORT_TOKEN));
+      expect(await flag.run("balance", "--token", SHORT_TOKEN)).toBe(1);
+      expect(flag.stderr()).toBe("Error: Rejected [redacted].\nHint: Check [redacted].\n");
+    });
+
+    it("hides a padded environment token whether the error shows it trimmed or as given", async () => {
+      await expectScrubbed(
+        () => harness({ home, env: { HUSHSCRIPT_TOKEN: PADDED } }),
+        [TRIMMED, PADDED],
+      );
+    });
+
+    it("hides a padded stored token whether the error shows it trimmed or as given", async () => {
+      await saveToken(join(home, ".config", "hushscript", "config.json"), PADDED, "linux");
+      await expectScrubbed(() => harness({ home }), [TRIMMED, PADDED]);
+    });
+
+    it("hides a padded --token whether the error shows it trimmed or as given", async () => {
+      for (const argv of [["--token", PADDED], [`--token=${PADDED}`]]) {
+        for (const shown of [TRIMMED, PADDED]) {
+          const h = harness({ home });
+          h.api.balance.mockRejectedValue(echo(shown));
+          expect(await h.run("balance", ...argv)).toBe(1);
+          expect(h.stderr()).toBe("Error: Rejected [redacted].\nHint: Check [redacted].\n");
+        }
+      }
+    });
+
+    it("hides a padded typed token from a later login error", async () => {
+      const secret = "hsr-typed-secret";
+      const base = join(home, secret);
+      await mkdir(base);
+      await mkdir(join(home, "target"));
+      await symlink(join(home, "target"), join(base, "hushscript"));
+      const h = harness({ home, secret: `  ${secret}  `, env: { XDG_CONFIG_HOME: base } });
+      expect(await h.run("login", "--json")).toBe(1);
+      expect(h.stderr()).not.toContain(secret);
+    });
+
+    it("hides a 5-character typed token from a later login error", async () => {
+      const base = join(home, SHORT_TOKEN);
+      await mkdir(base);
+      await mkdir(join(home, "target"));
+      await symlink(join(home, "target"), join(base, "hushscript"));
+      const h = harness({ home, secret: SHORT_TOKEN, env: { XDG_CONFIG_HOME: base } });
+      expect(await h.run("login", "--json")).toBe(1);
+      expect(JSON.parse(h.stderr())).toEqual({
+        type: "error",
+        code: "config_invalid",
+        numericCode: null,
+        status: null,
+        message: `The config folder ${join(home, "[redacted]", "hushscript")} is a symbolic link, so the token was not stored.`,
+        hint: "Replace the link with a real folder, or point XDG_CONFIG_HOME at one.",
+      });
+    });
+
+    it("leaves a blank token out of the secrets, so nothing is shredded", async () => {
+      const h = harness({ home, secret: "   " });
+      expect(await h.run("login", "--json")).toBe(2);
+      expect(JSON.parse(h.stderr())).toEqual({
+        type: "error",
+        code: "usage_error",
+        numericCode: null,
+        status: null,
+        message: "No token was entered.",
+        hint: null,
       });
     });
   });

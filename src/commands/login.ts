@@ -1,6 +1,6 @@
 import { Hushscript } from "@hushscript/sdk";
 import type { Command } from "commander";
-import { storePath, type Runtime } from "../context.ts";
+import { registerSecret, storePath, type Runtime } from "../context.ts";
 import { usageError } from "../errors.ts";
 import { saveToken } from "../store.ts";
 
@@ -18,8 +18,9 @@ export function registerLogin(program: Command, rt: Runtime): void {
           "Pipe the token on stdin, or run login in a terminal.",
         );
       }
-      const token = (supplied ?? (await deps.io.readSecret("Hushscript token: "))).trim();
-      rt.secrets.push(token);
+      const typed = supplied ?? (await deps.io.readSecret("Hushscript token: "));
+      registerSecret(rt.secrets, typed);
+      const token = typed.trim();
       if (token === "") throw usageError("No token was entered.");
       if (supplied !== undefined) {
         out.warning(
