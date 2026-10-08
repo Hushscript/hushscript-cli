@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ApiError } from "@hushscript/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configPath, readStoredToken, removeToken, resolveToken, saveToken } from "../src/store.ts";
 import { harness, OTHER_TOKEN, TEST_TOKEN } from "./helpers.ts";
@@ -396,6 +397,90 @@ describe("token precedence", () => {
     expect(await h.run("balance")).toBe(1);
     expect(h.stderr()).toBe("Error: Unexpected error: leaked [redacted]\n");
     expect(h.stdout()).toBe("");
+  });
+
+  describe("a stored token that is not shaped like a token", () => {
+    const ODD_TOKEN = "plain-stored-secret-value";
+
+    async function withStoredOddToken(): Promise<void> {
+      await saveToken(join(home, ".config", "hushscript", "config.json"), ODD_TOKEN, "linux");
+    }
+
+    it("is redacted from an API error body echoed in text mode", async () => {
+      await withStoredOddToken();
+      const h = harness({ home });
+      h.api.balance.mockRejectedValue(
+        new ApiError({
+          code: "bad_request",
+          status: 400,
+          message: `Rejected ${ODD_TOKEN}.`,
+          hint: `Check ${ODD_TOKEN}.`,
+        }),
+      );
+      expect(await h.run("balance")).toBe(1);
+      expect(h.created).toEqual([{ token: ODD_TOKEN, baseUrl: undefined }]);
+      expect(h.stderr()).toBe("Error: Rejected [redacted].\nHint: Check [redacted].\n");
+      expect(h.stdout()).toBe("");
+    });
+
+    it("is redacted from an API error body echoed under --json", async () => {
+      await withStoredOddToken();
+      const h = harness({ home });
+      h.api.balance.mockRejectedValue(
+        new ApiError({
+          code: "bad_request",
+          status: 400,
+          message: `Rejected ${ODD_TOKEN}.`,
+          hint: `Check ${ODD_TOKEN}.`,
+        }),
+      );
+      expect(await h.run("balance", "--json")).toBe(1);
+      expect(JSON.parse(h.stderr())).toEqual({
+        type: "error",
+        code: "bad_request",
+        numericCode: null,
+        status: 400,
+        message: "Rejected [redacted].",
+        hint: "Check [redacted].",
+      });
+      expect(h.stderr()).not.toContain(ODD_TOKEN);
+      expect(h.stdout()).toBe("");
+    });
+
+    it("is redacted from an unexpected error, in both modes", async () => {
+      await withStoredOddToken();
+      for (const argv of [[], ["--json"]]) {
+        const h = harness({ home });
+        h.api.balance.mockRejectedValue(new Error(`leaked ${ODD_TOKEN}`));
+        expect(await h.run("balance", ...argv)).toBe(1);
+        expect(h.stderr()).not.toContain(ODD_TOKEN);
+        expect(h.stderr()).toContain("leaked [redacted]");
+        expect(h.stdout()).toBe("");
+      }
+    });
+
+    it("is redacted from a purchase error that gets a retry notice", async () => {
+      await withStoredOddToken();
+      const h = harness({ home });
+      h.api.buy.mockRejectedValue(
+        Object.assign(
+          new ApiError({
+            code: "bad_gateway",
+            status: 502,
+            message: `Upstream saw ${ODD_TOKEN}.`,
+          }),
+          { idempotencyKey: "k-odd" },
+        ),
+      );
+      expect(await h.run("buy", "300min", "--yes", "--json")).toBe(1);
+      expect(h.stderr()).not.toContain(ODD_TOKEN);
+      expect(JSON.parse(h.stderr().split("\n")[1] ?? "")).toMatchObject({
+        type: "error",
+        code: "bad_gateway",
+        message: "Upstream saw [redacted].",
+        idempotencyKey: "k-odd",
+      });
+    });
   });
 
   it("exits 1 with a hint when there is no token anywhere", async () => {

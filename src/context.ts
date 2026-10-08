@@ -95,5 +95,7 @@ export async function openClient(rt: Runtime): Promise<Api> {
       hint: "Run `hushscript login`, set HUSHSCRIPT_TOKEN, or pass --token. Create a token in the Hushscript app under Account, Connected apps.",
     });
   }
+  // The flag and the environment token are in `secrets` already; the stored one is added once it is read.
+  if (!rt.secrets.includes(token)) rt.secrets.push(token);
   return deps.createClient({ token, baseUrl: valueOf(deps.env["HUSHSCRIPT_BASE_URL"]) });
 }
