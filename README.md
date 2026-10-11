@@ -163,7 +163,7 @@ The one text that can still reach stderr under `--json` is a prompt (`login` ask
 ## Development
 
 Everything runs in containers, through `just`: `just ci` runs the static checks, the tests and the
-end-to-end run of the built binary against the conformance mock, on Node 22 and 24. Until
+end-to-end run of the built binary against the conformance mock, on Node 22, 24, and 26. Until
 `@hushscript/sdk` is on npm the gate packs the SDK from the commit in `sdk-ref`; see
 `docs/sdk-dependency.md`.
 
