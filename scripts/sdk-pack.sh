@@ -17,7 +17,7 @@ if [ -f .sdk/ref ] && [ -f .sdk/hushscript-sdk.tgz ] && [ "$(cat .sdk/ref)" = "$
   exit 0
 fi
 if ! git -C "$sdk_dir" cat-file -e "$ref^{commit}" 2>/dev/null; then
-  echo "sdk-pack: commit $ref is not in $sdk_dir (set SDK_DIR to a checkout of hushscript-typescript)" >&2
+  echo "sdk-pack: commit $ref is not in $sdk_dir (set SDK_DIR to a checkout of hushscript-sdk-typescript)" >&2
   exit 1
 fi
 

@@ -4,11 +4,11 @@
 (ruling R64) nothing can install that from the registry, so the local gate installs a tarball packed
 from the TypeScript SDK repository.
 
-- `sdk-ref` holds the commit of `hushscript-typescript` the CLI is built against.
+- `sdk-ref` holds the commit of `hushscript-sdk-typescript` the CLI is built against.
 - `scripts/sdk-pack.sh` (the `just sdk-pack` recipe, a dependency of every other recipe) archives
   that commit with `git archive`, builds and packs it in a container and writes
   `.sdk/hushscript-sdk.tgz` (ignored by git). It skips the work when `.sdk/ref` already names the
-  commit. `SDK_DIR` points at the checkout (default `../hushscript-typescript`). `ci.yml` checks the
+  commit. `SDK_DIR` points at the checkout (default `../hushscript-sdk-typescript`). `ci.yml` checks the
   SDK out at that commit and sets `SDK_DIR`.
 - `package-lock.json` records `node_modules/@hushscript/sdk` as `resolved: "file:.sdk/hushscript-sdk.tgz"`
   with no integrity. The SDK's own dependencies (`openapi-fetch`, `music-metadata`) are locked from the

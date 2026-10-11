@@ -8,7 +8,7 @@ export HOST_GID := `id -g`
 conformance_ref := `sed -n 's/^ *"conformanceRef": *"\([^"]*\)".*/\1/p' package.json`
 export CONFORMANCE_CONTEXT := env("CONFORMANCE_CONTEXT", "https://github.com/Hushscript/hushscript-sdk-conformance.git#" + conformance_ref)
 # Until @hushscript/sdk is on npm (ruling R64) the gate packs it from this checkout at the commit in ./sdk-ref.
-sdk_dir := env("SDK_DIR", "../hushscript-typescript")
+sdk_dir := env("SDK_DIR", "../hushscript-sdk-typescript")
 
 node22_image := "node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392"
 node24_image := "node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20"
