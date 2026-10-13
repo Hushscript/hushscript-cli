@@ -4,3 +4,4 @@ coverage/
 reports/
 .sdk/
 package-lock.json
+CHANGELOG.md
