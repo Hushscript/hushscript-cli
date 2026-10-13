@@ -11,10 +11,8 @@ RUN groupadd --gid 10001 dev && useradd --uid 10001 --gid 10001 --no-create-home
 ENV HOME=/tmp
 WORKDIR /work
 
-# The lockfile points @hushscript/sdk at .sdk/hushscript-sdk.tgz (see scripts/sdk-pack.sh and docs/sdk-dependency.md).
 FROM base AS deps
 COPY package.json package-lock.json ./
-COPY .sdk/hushscript-sdk.tgz .sdk/hushscript-sdk.tgz
 RUN npm ci --ignore-scripts --no-audit --no-fund
 
 FROM base AS dev
@@ -26,5 +24,4 @@ USER 10001:10001
 # Production dependencies only: the consumer check in `just build` installs the packed CLI next to these.
 FROM base AS proddeps
 COPY package.json package-lock.json ./
-COPY .sdk/hushscript-sdk.tgz .sdk/hushscript-sdk.tgz
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
