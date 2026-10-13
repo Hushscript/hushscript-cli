@@ -158,12 +158,12 @@ The one text that can still reach stderr under `--json` is a prompt (`login` ask
 - REST API reference: <https://hushscript.com/developers>
 - Package on npm: <https://www.npmjs.com/package/@hushscript/cli>
 - Source: <https://github.com/Hushscript/hushscript-cli>
-- Other Hushscript SDKs: [TypeScript](https://github.com/Hushscript/hushscript-typescript), [Python](https://github.com/Hushscript/hushscript-python), [Go](https://github.com/Hushscript/hushscript-go), [PHP](https://github.com/Hushscript/hushscript-php)
+- Other Hushscript SDKs: [TypeScript](https://github.com/Hushscript/hushscript-sdk-typescript), [Python](https://github.com/Hushscript/hushscript-sdk-python), [Go](https://github.com/Hushscript/hushscript-sdk-go), [PHP](https://github.com/Hushscript/hushscript-sdk-php)
 
 ## Development
 
 Everything runs in containers, through `just`: `just ci` runs the static checks, the tests and the
-end-to-end run of the built binary against the conformance mock, on Node 22 and 24. Until
+end-to-end run of the built binary against the conformance mock, on Node 22, 24, and 26. Until
 `@hushscript/sdk` is on npm the gate packs the SDK from the commit in `sdk-ref`; see
 `docs/sdk-dependency.md`.
 
