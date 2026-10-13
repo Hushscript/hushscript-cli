@@ -67,9 +67,11 @@ lint version=floor: sdk-pack
     # The one lint step with network access: it asks the registry about advisories and signatures.
     # Until @hushscript/sdk is published (docs/sdk-dependency.md) the signature check runs on a copy of the tree
     # without it, because the registry has no such package yet; every other package is checked.
+    # Advisories are checked on the newest Node only.
+    audit=""
+    if [ "{{version}}" = "{{latest}}" ]; then audit='timeout 300 npm audit --omit=dev --audit-level=high && '; fi
     docker run {{sandbox}} "hushscript-cli-dev:node{{version}}" \
-      sh -c 'timeout 300 npm audit --omit=dev --audit-level=high \
-        && mkdir /tmp/signed && cp -r package.json package-lock.json node_modules /tmp/signed/ \
+      sh -c "${audit}"'mkdir /tmp/signed && cp -r package.json package-lock.json node_modules /tmp/signed/ \
         && rm -rf /tmp/signed/node_modules/@hushscript && cd /tmp/signed && timeout 300 npm audit signatures'
 
 # package build plus package-correctness checks, then install the packed CLI next to its production dependencies and run it.
