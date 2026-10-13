@@ -59,17 +59,6 @@ jobs:
           repository: Hushscript/hushscript-sdk-conformance
           ref: ${{ steps.conformance.outputs.ref }}
           path: conformance
-      - name: Read the pinned SDK commit
-        id: sdk
-        run: echo "ref=$(tr -d '[:space:]' < cli/sdk-ref)" >> "$GITHUB_OUTPUT"
-      # Until @hushscript/sdk is on npm (docs/sdk-dependency.md), the gate packs the SDK from this commit.
-      - name: Check out the SDK at the pinned commit
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          repository: Hushscript/hushscript-sdk-typescript
-          ref: ${{ steps.sdk.outputs.ref }}
-          path: sdk
       - name: Install just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
       - name: Run just ci
@@ -77,5 +66,4 @@ jobs:
         env:
           NODE_VERSION: ${{ matrix.node }}
           CONFORMANCE_CONTEXT: ../conformance
-          SDK_DIR: ../sdk
         run: just ci "$NODE_VERSION"

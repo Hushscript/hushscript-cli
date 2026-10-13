@@ -1,2 +1,2 @@
 [files]
-extend-exclude = ["package-lock.json", "LICENSE", ".sdk/**"]
+extend-exclude = ["package-lock.json", "LICENSE"]
