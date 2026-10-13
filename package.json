@@ -1,0 +1,54 @@
+{
+  "name": "@hushscript/cli",
+  "version": "0.1.0",
+  "description": "Command line client for the Hushscript transcription API.",
+  "license": "MIT",
+  "type": "module",
+  "homepage": "https://github.com/Hushscript/hushscript-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hushscript/hushscript-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Hushscript/hushscript-cli/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist"
+  ],
+  "bin": {
+    "hushscript": "dist/index.js"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "config": {
+    "conformanceRef": "v1.0.0"
+  },
+  "scripts": {
+    "build": "tsup"
+  },
+  "dependencies": {
+    "@hushscript/sdk": "^1.0.0",
+    "commander": "15.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "22.20.5",
+    "@vitest/coverage-v8": "5.0.3",
+    "eslint": "10.12.0",
+    "eslint-plugin-n": "18.4.1",
+    "eslint-plugin-regexp": "3.3.1",
+    "globals": "17.13.0",
+    "knip": "6.39.0",
+    "prettier": "3.9.9",
+    "publint": "0.3.25",
+    "tsup": "8.5.1",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.1",
+    "vitest": "5.0.3"
+  }
+}
