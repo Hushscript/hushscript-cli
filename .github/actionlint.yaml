@@ -1,0 +1,4 @@
+# The latest actionlint release predates this generally available hosted runner.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

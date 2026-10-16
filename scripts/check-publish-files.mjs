@@ -7,7 +7,8 @@ if (file === undefined) throw new Error("usage: check-publish-files.mjs <pack.js
 const parsed = /** @type {unknown} */ (JSON.parse(readFileSync(file, "utf8")));
 /** @typedef {{ name: string, version: string, files: { path: string }[] }} PackReport */
 const first = Array.isArray(parsed) ? /** @type {unknown} */ (parsed[0]) : parsed;
-const report = /** @type {PackReport} */ (first);
+const entry = /** @type {PackReport | Record<string, PackReport>} */ (first);
+const report = /** @type {PackReport} */ ("files" in entry ? entry : Object.values(entry)[0]);
 const paths = report.files.map((entry) => entry.path).sort();
 console.log(`${report.name}@${report.version}`);
 for (const path of paths) console.log(`  ${path}`);
