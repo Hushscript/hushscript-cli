@@ -2,7 +2,7 @@
 
 The official command line client for [Hushscript](https://hushscript.com), a privacy-first,
 pay-as-you-go transcription service. It is built on the official TypeScript SDK, `@hushscript/sdk`,
-and needs Node 22 or newer.
+and needs Node 24 or newer.
 
 ## Why Hushscript
 
@@ -193,7 +193,7 @@ The one text that can still reach stderr under `--json` is a prompt (`login` ask
 ## Development
 
 Everything runs in containers, through `just`: `just ci` runs the static checks, the tests and the
-end-to-end run of the built binary against the conformance mock, on Node 22, 24, and 26.
+end-to-end run of the built binary against the conformance mock, on Node 24 and 26.
 
 ## License
 
