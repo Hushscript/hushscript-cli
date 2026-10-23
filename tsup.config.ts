@@ -3,7 +3,7 @@ import type { Options } from "tsup";
 const config: Options = {
   entry: ["src/index.ts"],
   format: ["esm"],
-  target: "node22",
+  target: "node24",
   platform: "node",
   clean: true,
   treeshake: true,
