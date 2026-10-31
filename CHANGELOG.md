@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/Hushscript/hushscript-cli/compare/v1.0.1...v1.0.2) (2026-10-31)
+
+
+### Bug Fixes
+
+* **deps:** update dependencies to latest ([1ace62a](https://github.com/Hushscript/hushscript-cli/commit/1ace62ab54b04230fc5d4327bbb3b3b4a3db69eb))
+
 ## [1.0.1](https://github.com/Hushscript/hushscript-cli/compare/v1.0.0...v1.0.1) (2026-10-13)
 
 
