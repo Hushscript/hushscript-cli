@@ -32,23 +32,23 @@
     "build": "tsup"
   },
   "dependencies": {
-    "@hushscript/sdk": "^1.0.1",
+    "@hushscript/sdk": "^1.1.1",
     "commander": "15.0.0"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "24.19.2",
     "@vitest/coverage-v8": "5.0.5",
-    "eslint": "10.13.0",
+    "eslint": "10.14.0",
     "eslint-plugin-n": "18.5.0",
-    "eslint-plugin-regexp": "3.3.1",
+    "eslint-plugin-regexp": "3.3.2",
     "globals": "17.13.0",
-    "knip": "6.42.1",
+    "knip": "6.44.0",
     "prettier": "3.9.10",
     "publint": "0.3.25",
     "tsup": "9.0.0",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.72.0",
+    "typescript-eslint": "8.72.1",
     "vitest": "5.0.5"
   }
 }
