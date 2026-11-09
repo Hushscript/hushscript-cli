@@ -42,7 +42,7 @@
     "eslint": "10.14.0",
     "eslint-plugin-n": "18.5.0",
     "eslint-plugin-regexp": "3.3.3",
-    "globals": "17.13.0",
+    "globals": "17.14.0",
     "knip": "6.44.1",
     "prettier": "3.9.10",
     "publint": "0.3.25",
