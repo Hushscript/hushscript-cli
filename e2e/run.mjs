@@ -198,6 +198,8 @@ await step("jobs --json lists a completed SDK job over the wire", async () => {
             languageCode: null,
             speakerDetection: true,
             medicalMode: false,
+            vetMode: false,
+            keepDisfluencies: false,
             multichannel: false,
             translationTargets: [],
             keyterms: false,

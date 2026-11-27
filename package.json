@@ -26,13 +26,13 @@
     "provenance": true
   },
   "config": {
-    "conformanceRef": "v1.0.0"
+    "conformanceRef": "v1.1.0"
   },
   "scripts": {
     "build": "tsup"
   },
   "dependencies": {
-    "@hushscript/sdk": "^1.1.1",
+    "@hushscript/sdk": "^1.2.0",
     "commander": "15.0.0"
   },
   "devDependencies": {

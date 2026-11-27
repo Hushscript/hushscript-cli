@@ -32,6 +32,8 @@ const TRANSCRIPT_BODY: Body = {
   edited: false,
   matter_code: null,
   client_code: null,
+  origin_source: null,
+  origin_app: null,
   body: {
     version: 1,
     original: utterances(["Welcome to the call.", "Let's begin."]),
