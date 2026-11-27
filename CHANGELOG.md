@@ -6,6 +6,11 @@
 
 * job output carries the new `vet_mode` and `keep_disfluencies` option keys (covered by the options fixture; no code change).
 
+### Bug Fixes
+
+* depends on `@hushscript/sdk` 1.2.0: `--translate` no longer turns speaker detection on, and more than 15 distinct targets is refused before any upload.
+* the conformance suite is pinned to the `v1.1.0` tag.
+
 ### Documentation
 
 * README links point at the live pricing page and the SDK section of the developers page; the old `/pricing` and `/sdks` URLs redirect there.
