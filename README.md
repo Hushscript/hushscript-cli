@@ -7,7 +7,7 @@ and needs Node 24 or newer.
 ## Why Hushscript
 
 - **No subscription.** You buy prepaid minute packs, and nothing recurs. Current prices are on the
-  [pricing page](https://hushscript.com/pricing).
+  [pricing page](https://hushscript.com/pay-as-you-go-transcription-pricing).
 - **The audio you send isn't kept.** The audio sent for transcription isn't kept after processing. Stored
   transcripts are encrypted at rest, and you choose how long they stay.
 - **Free speaker labels and AI insights.** Speaker labels carry no extra charge (translation costs
@@ -29,7 +29,7 @@ and needs Node 24 or newer.
 - Buy a pack with your saved card, with the no-refund notice shown and a confirmation first.
 - Script it: `--json` output, JSON Lines errors on stderr and fixed exit codes.
 
-[Website](https://hushscript.com) · [Pricing](https://hushscript.com/pricing) · [SDK docs](https://hushscript.com/sdks) · [API reference](https://hushscript.com/developers)
+[Website](https://hushscript.com) · [Pricing](https://hushscript.com/pay-as-you-go-transcription-pricing) · [SDK docs](https://hushscript.com/developers#sdks-and-cli) · [API reference](https://hushscript.com/developers)
 
 ## Quick start
 
@@ -184,7 +184,7 @@ The one text that can still reach stderr under `--json` is a prompt (`login` ask
 
 ## Links
 
-- Documentation: <https://hushscript.com/sdks>
+- Documentation: <https://hushscript.com/developers#sdks-and-cli>
 - REST API reference: <https://hushscript.com/developers>
 - Package on npm: <https://www.npmjs.com/package/@hushscript/cli>
 - Source: <https://github.com/Hushscript/hushscript-cli>

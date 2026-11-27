@@ -6,6 +6,10 @@
 
 * job output carries the new `vet_mode` and `keep_disfluencies` option keys (covered by the options fixture; no code change).
 
+### Documentation
+
+* README links point at the live pricing page and the SDK section of the developers page; the old `/pricing` and `/sdks` URLs redirect there.
+
 ## [1.0.1](https://github.com/Hushscript/hushscript-cli/compare/v1.0.0...v1.0.1) (2026-10-13)
 
 
