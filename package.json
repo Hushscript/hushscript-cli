@@ -1,6 +1,6 @@
 {
   "name": "@hushscript/cli",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Command line client for the Hushscript transcription API.",
   "license": "MIT",
   "type": "module",
